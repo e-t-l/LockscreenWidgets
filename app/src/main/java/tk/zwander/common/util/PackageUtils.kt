@@ -1,3 +1,5 @@
+@file:Suppress("unused")
+
 package tk.zwander.common.util
 
 import android.annotation.SuppressLint
@@ -65,6 +67,7 @@ fun rememberPackageInstallationStatus(packageName: String): Boolean {
 
     fun checkStatus(): Boolean {
         return try {
+            @Suppress("SENSELESS_COMPARISON")
             context.packageManager.getApplicationInfo(packageName, 0) != null
         } catch (e: PackageManager.NameNotFoundException) {
             false

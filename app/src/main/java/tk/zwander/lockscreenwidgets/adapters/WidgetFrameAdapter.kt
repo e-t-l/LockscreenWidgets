@@ -4,6 +4,7 @@ import android.appwidget.AppWidgetProviderInfo
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
+import tk.zwander.common.activities.SelectIconPackActivity
 import tk.zwander.common.adapters.BaseAdapter
 import tk.zwander.common.data.WidgetData
 import tk.zwander.common.listeners.WidgetResizeListener
@@ -13,40 +14,40 @@ import tk.zwander.common.util.eventManager
 import tk.zwander.common.util.frameSizeAndPosition
 import tk.zwander.common.util.prefManager
 import tk.zwander.lockscreenwidgets.activities.add.ReconfigureFrameWidgetActivity
+import tk.zwander.lockscreenwidgets.util.FramePrefs
 
 /**
  * The adapter for the widget frame itself.
  */
 open class WidgetFrameAdapter(
+    frameId: Int,
     context: Context,
     rootView: View,
     onRemoveCallback: (WidgetData, Int) -> Unit,
     private val saveTypeGetter: () -> FrameSizeAndPosition.FrameType,
-) : BaseAdapter(context, rootView, onRemoveCallback) {
+) : BaseAdapter(frameId, context, rootView, onRemoveCallback) {
     override val colCount: Int
-        get() = context.prefManager.frameColCount
+        get() = FramePrefs.getColCountForFrame(context, holderId)
     override val rowCount: Int
-        get() = context.prefManager.frameRowCount
-    override val minColSpan: Int
-        get() = 1
+        get() = FramePrefs.getRowCountForFrame(context, holderId)
     override val minRowSpan: Int
         get() = 1
     override val rowSpanForAddButton: Int
         get() = rowCount
     override var currentWidgets: Collection<WidgetData>
-        get() = context.prefManager.currentWidgets
+        get() = FramePrefs.getWidgetsForFrame(context, holderId)
         set(value) {
-            context.prefManager.currentWidgets = LinkedHashSet(value)
+            FramePrefs.setWidgetsForFrame(context, holderId, value)
         }
     override val widgetCornerRadius: Float
         get() = context.prefManager.frameWidgetCornerRadiusDp
 
     override fun launchAddActivity() {
-        context.eventManager.sendEvent(Event.LaunchAddWidget)
+        context.eventManager.sendEvent(Event.LaunchAddWidget(holderId))
     }
 
     override fun launchReconfigure(id: Int, providerInfo: AppWidgetProviderInfo) {
-        ReconfigureFrameWidgetActivity.launch(context, id, providerInfo)
+        ReconfigureFrameWidgetActivity.launch(context, id, holderId, providerInfo)
     }
 
     override fun View.onWidgetResize(
@@ -56,18 +57,22 @@ open class WidgetFrameAdapter(
         direction: Int
     ) {
         params.width =
-            params.width / context.prefManager.frameColCount * (data.size?.safeWidgetWidthSpan ?: 1)
+            params.width / colCount * (data.size?.safeWidgetWidthSpan ?: 1)
         params.height =
-            params.height / context.prefManager.frameRowCount * (data.size?.safeWidgetHeightSpan ?: 1)
+            params.height / rowCount * (data.size?.safeWidgetHeightSpan ?: 1)
+    }
+
+    override fun launchShortcutIconOverride(id: Int) {
+        SelectIconPackActivity.launchForOverride(context, id)
     }
 
     override fun getThresholdPx(which: WidgetResizeListener.Which): Int {
         return context.run {
             val frameSize = frameSizeAndPosition.getSizeForType(saveTypeGetter())
             if (which == WidgetResizeListener.Which.LEFT || which == WidgetResizeListener.Which.RIGHT) {
-                frameSize.x.toInt() / prefManager.frameColCount
+                frameSize.x.toInt() / colCount
             } else {
-                frameSize.y.toInt() / prefManager.frameRowCount
+                frameSize.y.toInt() / rowCount
             }
         }
     }

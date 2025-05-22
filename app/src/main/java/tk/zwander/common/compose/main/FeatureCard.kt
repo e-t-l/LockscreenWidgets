@@ -43,16 +43,16 @@ import tk.zwander.common.compose.data.FeatureCardInfo
 import tk.zwander.common.compose.util.rememberBooleanPreferenceState
 import tk.zwander.common.data.MainPageButton
 import tk.zwander.common.util.Event
+import tk.zwander.common.util.EventObserver
+import tk.zwander.common.util.EventObserverEffect
 import tk.zwander.common.util.PrefManager
 import tk.zwander.common.util.eventManager
 import tk.zwander.common.util.prefManager
 import tk.zwander.lockscreenwidgets.BuildConfig
 import tk.zwander.lockscreenwidgets.R
-import tk.zwander.lockscreenwidgets.activities.SettingsActivity
+import tk.zwander.lockscreenwidgets.activities.ComposeFrameSettingsActivity
 import tk.zwander.lockscreenwidgets.activities.UsageActivity
-import tk.zwander.lockscreenwidgets.fragments.SettingsFragment
-import tk.zwander.lockscreenwidgets.util.WidgetFrameDelegate
-import tk.zwander.widgetdrawer.fragments.DrawerSettings
+import tk.zwander.widgetdrawer.activities.ComposeDrawerSettingsActivity
 
 @Composable
 fun rememberFeatureCards(): List<FeatureCardInfo> {
@@ -61,18 +61,17 @@ fun rememberFeatureCards(): List<FeatureCardInfo> {
     return remember {
         listOf(
             FeatureCardInfo(
-                R.string.app_name,
-                BuildConfig.VERSION_NAME,
-                R.string.enabled,
-                R.string.disabled,
-                PrefManager.KEY_WIDGET_FRAME_ENABLED,
-                listOf(
+                title = R.string.app_name,
+                version = BuildConfig.VERSION_NAME,
+                enabledLabel = R.string.enabled,
+                disabledLabel = R.string.disabled,
+                enabledKey = PrefManager.KEY_WIDGET_FRAME_ENABLED,
+                buttons = listOf(
                     MainPageButton(
                         R.drawable.ic_baseline_preview_24,
                         R.string.preview
                     ) {
-                        WidgetFrameDelegate.retrieveInstance(context)
-                            ?.updateState { it.copy(isPreview = !it.isPreview) }
+                        context.eventManager.sendEvent(Event.PreviewFrames(Event.PreviewFrames.ShowMode.TOGGLE))
                     },
                     MainPageButton(
                         R.drawable.ic_baseline_help_outline_24,
@@ -84,12 +83,23 @@ fun rememberFeatureCards(): List<FeatureCardInfo> {
                         R.drawable.ic_baseline_settings_24,
                         R.string.settings
                     ) {
-                        SettingsActivity.launch(context, SettingsFragment::class.java)
+                        context.startActivity(Intent(context, ComposeFrameSettingsActivity::class.java))
                     },
                 ),
-                { context.eventManager.sendEvent(Event.LaunchAddWidget) },
-                { context.prefManager.widgetFrameEnabled },
-                { context.prefManager.widgetFrameEnabled = it }
+                onAddWidget = {
+                    context.eventManager.sendEvent(Event.PreviewFrames(Event.PreviewFrames.ShowMode.SHOW_FOR_SELECTION, 100))
+                },
+                isEnabled = { context.prefManager.widgetFrameEnabled },
+                onEnabledChanged = { context.prefManager.widgetFrameEnabled = it },
+                eventObserver = object : EventObserver {
+                    override fun onEvent(event: Event) {
+                        if (event is Event.FrameSelected) {
+                            if (event.frameId != null && event.requestCode == 100) {
+                                context.eventManager.sendEvent(Event.LaunchAddWidget(event.frameId))
+                            }
+                        }
+                    }
+                },
             ),
             FeatureCardInfo(
                 R.string.widget_drawer,
@@ -108,7 +118,7 @@ fun rememberFeatureCards(): List<FeatureCardInfo> {
                         R.drawable.ic_baseline_settings_24,
                         R.string.settings
                     ) {
-                        SettingsActivity.launch(context, DrawerSettings::class.java)
+                        context.startActivity(Intent(context, ComposeDrawerSettingsActivity::class.java))
                     }
                 ),
                 { context.eventManager.sendEvent(Event.LaunchAddDrawerWidget(false)) },
@@ -122,7 +132,7 @@ fun rememberFeatureCards(): List<FeatureCardInfo> {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun FeatureCard(info: FeatureCardInfo) {
-    val context = LocalContext.current
+    EventObserverEffect(info.eventObserver)
 
     Card(
         modifier = Modifier
@@ -147,10 +157,10 @@ fun FeatureCard(info: FeatureCardInfo) {
                 )
             }
 
-            var enabled by context.rememberBooleanPreferenceState(
+            var enabled by rememberBooleanPreferenceState(
                 key = info.enabledKey,
-                enabled = info.isEnabled,
-                onEnabledChanged = info.onEnabledChanged,
+                enabled = { info.isEnabled() },
+                onEnabledChanged = { _, v -> info.onEnabledChanged(v) },
             )
 
             CardSwitch(
@@ -160,7 +170,9 @@ fun FeatureCard(info: FeatureCardInfo) {
             )
 
             AnimatedVisibility(visible = enabled) {
-                Column {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                     Spacer(Modifier.size(16.dp))
 
                     SubduedOutlinedButton(
@@ -220,7 +232,7 @@ fun FeatureCard(info: FeatureCardInfo) {
                                         }
                                         .then(
                                             if (maxItemHeight > 0) {
-                                                with (LocalDensity.current) {
+                                                with(LocalDensity.current) {
                                                     Modifier.height(maxItemHeight.toDp())
                                                 }
                                             } else {

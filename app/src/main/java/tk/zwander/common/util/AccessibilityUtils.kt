@@ -1,9 +1,12 @@
 package tk.zwander.common.util
 
 import android.app.KeyguardManager
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
+import android.provider.Settings
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -22,8 +25,9 @@ import tk.zwander.common.activities.DismissOrUnlockActivity
 import tk.zwander.common.data.window.WindowInfo
 import tk.zwander.common.data.window.WindowRootPair
 import tk.zwander.lockscreenwidgets.appwidget.IDListProvider
-import tk.zwander.lockscreenwidgets.services.hasVisibleIds
-import tk.zwander.lockscreenwidgets.util.WidgetFrameDelegate
+import tk.zwander.lockscreenwidgets.services.Accessibility
+import tk.zwander.lockscreenwidgets.util.FrameSpecificPreferences
+import tk.zwander.lockscreenwidgets.util.MainWidgetFrameDelegate
 import tk.zwander.widgetdrawer.util.DrawerDelegate
 import java.util.concurrent.ConcurrentLinkedQueue
 
@@ -35,15 +39,22 @@ object AccessibilityUtils {
         val hideForPresentIds: AtomicBoolean = atomic(false),
         val hideForNonPresentIds: AtomicBoolean = atomic(false),
         val hasClearAllButton: AtomicBoolean = atomic(false),
+        val hasSettingsContainerButton: AtomicBoolean = atomic(false),
+        val onFaceWidgets: AtomicBoolean = atomic(false),
     )
 
     private fun Context.processNode(
         nodeState: NodeState,
         node: AccessibilityNodeInfo?,
-        isOnKeyguard: Boolean,
     ) {
         if (node == null) {
             return
+        }
+
+        if (!nodeState.onFaceWidgets.value) {
+            if (node.hasWildcardId("com.samsung.android.app.aodservice:id/facewidget_")) {
+                nodeState.onFaceWidgets.value = true
+            }
         }
 
         //If the user has enabled the option to hide the frame on security (pin, pattern, password)
@@ -51,18 +62,19 @@ object AccessibilityUtils {
         //checking for the existence of a security input, since there are a lot of different possible
         //IDs, and OEMs change them. "notification_panel" and "left_button" are largely unchanged,
         //although this method isn't perfect.
-        if (isOnKeyguard && prefManager.hideOnSecurityPage && !nodeState.onMainLockscreen.value) {
+        if (!nodeState.onMainLockscreen.value) {
             if (node.hasVisibleIds(
                     "com.android.systemui:id/notification_panel",
                     "com.android.systemui:id/left_button",
                     "com.android.systemui:id/camera_button",
+                    "com.android.systemui:id/keyguard_indication_text_bottom",
                 )
             ) {
                 nodeState.onMainLockscreen.value = true
             }
         }
 
-        if (isOnKeyguard && prefManager.hideOnNotificationShade && !nodeState.showingNotificationsPanel.value) {
+        if (!nodeState.showingNotificationsPanel.value) {
             if (node.hasVisibleIds(
                     "com.android.systemui:id/quick_settings_panel",
                     "com.android.systemui:id/settings_button",
@@ -85,13 +97,20 @@ object AccessibilityUtils {
         //check if the frame can actually show. This checks to the "more_button"
         //ID, which is unique to One UI (it's the three-dot button), and is only
         //visible when the NC is fully expanded.
-        if (prefManager.showInNotificationCenter && !nodeState.hasMoreButton.value) {
-            if (node.hasVisibleIds("com.android.systemui:id/more_button")) {
+        if (!nodeState.hasMoreButton.value) {
+            if (node.hasVisibleIds("com.android.systemui:id/more_button") ||
+                node.hasVisibleIds("com.android.systemui:id/edit_button")) {
                 nodeState.hasMoreButton.value = true
             }
         }
 
-        if (prefManager.showInNotificationCenter && !nodeState.hasClearAllButton.value) {
+        if (!nodeState.hasSettingsContainerButton.value) {
+            if (node.hasVisibleIds("com.android.systemui:id/settings_button_container")) {
+                nodeState.hasSettingsContainerButton.value = isPixelUI
+            }
+        }
+
+        if (!nodeState.hasClearAllButton.value) {
             if (node.hasVisibleIds("com.android.systemui:id/clear_all")) {
                 nodeState.hasClearAllButton.value = true
             }
@@ -123,7 +142,6 @@ object AccessibilityUtils {
      */
     private suspend fun Context.getWindows(
         windows: List<AccessibilityWindowInfo>,
-        isOnKeyguard: Boolean,
     ): WindowInfo {
         val nodeState = NodeState()
 
@@ -147,7 +165,7 @@ object AccessibilityUtils {
         val processed = windows.mapIndexedParallel { index, rawWindow ->
             val safeRoot = try {
                 rawWindow.root
-            } catch (e: NullPointerException) {
+            } catch (_: NullPointerException) {
                 null
             } catch (e: Exception) {
                 logUtils.normalLog("Error getting window root", e)
@@ -163,16 +181,14 @@ object AccessibilityUtils {
                     minSysUiWindowIndex = index
                 }
 
-                safeRoot?.let { root ->
-                    addAllNodesToList(
-                        root,
-                        sysUiWindowNodes,
-                        sysUiWindowViewIds,
-                        sysUiWindowAwaits,
-                    ) { node ->
-                        launch(Dispatchers.IO) {
-                            processNode(nodeState, node, isOnKeyguard)
-                        }
+                addAllNodesToList(
+                    safeRoot,
+                    sysUiWindowNodes,
+                    sysUiWindowViewIds,
+                    sysUiWindowAwaits,
+                ) { node ->
+                    launch(Dispatchers.IO) {
+                        processNode(nodeState, node)
                     }
                 }
             }
@@ -274,23 +290,23 @@ object AccessibilityUtils {
             awaits.add(async {
                 val child = try {
                     parentNode.getChild(i)
-                } catch (e: SecurityException) {
+                } catch (_: SecurityException) {
                     //Sometimes a SecurityException gets thrown here (on Huawei devices)
                     //so just return null if it happens
                     null
-                } catch (e: NullPointerException) {
+                } catch (_: NullPointerException) {
                     //Sometimes a NullPointerException is thrown here with this error:
                     //"Attempt to read from field 'com.android.server.appwidget.AppWidgetServiceImpl$ProviderId
                     //com.android.server.appwidget.AppWidgetServiceImpl$Provider.id' on a null object reference"
                     //so just return null if that happens.
                     null
-                } catch (e: IllegalStateException) {
+                } catch (_: IllegalStateException) {
                     try {
                         parentNode.isSealed = true
                         parentNode.getChild(i).also {
                             parentNode.isSealed = false
                         }
-                    } catch (e: Exception) {
+                    } catch (_: Exception) {
                         null
                     }
                 }
@@ -309,127 +325,77 @@ object AccessibilityUtils {
         }
     }
 
-    fun CoroutineScope.runAccessibilityJob(
-        context: Context,
-        event: AccessibilityEvent?,
-        frameDelegate: WidgetFrameDelegate,
-        drawerDelegate: DrawerDelegate,
-        power: PowerManager,
-        kgm: KeyguardManager,
+    suspend fun Context.runWindowOperation(
         wm: WindowManager,
-        imm: InputMethodManager,
+        frameDelegates: Map<Int, MainWidgetFrameDelegate>,
+        drawerDelegate: DrawerDelegate,
+        isScreenOn: Boolean,
+        isOnKeyguard: Boolean,
         getWindows: () -> List<AccessibilityWindowInfo>?,
-    ) = async(Dispatchers.Main) {
-        with(context) {
-            //This block here runs even when unlocked, but it only takes a millisecond at most,
-            //so it shouldn't be noticeable to the user. We use this to check the current keyguard
-            //state and, if applicable, send the keyguard dismissal broadcast.
+        initialRun: Boolean = false,
+    ) {
+        logUtils.debugLog("Trying to run window operation " +
+                "${initialRun}, " +
+                "${isScreenOn}, " +
+                "${isOnKeyguard}, " +
+                "${prefManager.widgetFrameEnabled}, " +
+                "${prefManager.drawerEnabled}, " +
+                "${drawerDelegate.isAttached}, " +
+                "${prefManager.drawerHideWhenNotificationPanelOpen}",
+            null,
+        )
 
-            frameDelegate.updateState {
-                try {
-                    it.copy(showingKeyboard = imm.inputMethodWindowVisibleHeight > 0)
-                } catch (e: Throwable) {
-                    // Fetching the IME height can cause the system to throw an NPE:
-                    // "Attempt to read from field 'com.android.server.wm.DisplayFrames com.android.server.wm.DisplayContent.mDisplayFrames' on a null object reference".
-                    // If this happens, assume the keyboard isn't showing.
-                    it.copy(showingKeyboard = false)
+        //The below block can (very rarely) take over half a second to execute, so only run it
+        //if we actually need to (i.e. on the lock screen and screen is on).
+        if (initialRun || (isScreenOn &&
+                    (((isOnKeyguard || FrameSpecificPreferences.doAnyFramesHaveSettingEnabled(this, PrefManager.KEY_SHOW_IN_NOTIFICATION_CENTER)) &&
+                            prefManager.widgetFrameEnabled /* This is only needed when the frame is enabled */) ||
+                            (prefManager.drawerEnabled && drawerDelegate.isAttached && prefManager.drawerHideWhenNotificationPanelOpen)))) {
+
+            logUtils.debugLog("Running window operation.", if (initialRun) LogUtils.DefaultException() else null)
+
+            val windowInfo = getWindows()?.let {
+                getWindows(it).also { windowInfo ->
+                    logUtils.debugLog("Got windows $windowInfo", null)
                 }
             }
 
-            //Check if the screen is on.
-            val isScreenOn = power.isInteractive
-            if (frameDelegate.commonState.isScreenOn != isScreenOn) {
-                //Make sure to turn off temp hide if it was on.
-                frameDelegate.updateState { it.copy(isTempHide = false) }
-                frameDelegate.updateCommonState { it.copy(isScreenOn = isScreenOn) }
-                drawerDelegate.updateCommonState { it.copy(isScreenOn = isScreenOn) }
-            }
-
-            //Check if the lock screen is shown.
-            val isOnKeyguard = kgm.isKeyguardLocked
-
-            if (isOnKeyguard != drawerDelegate.commonState.wasOnKeyguard) {
-                drawerDelegate.updateCommonState { it.copy(wasOnKeyguard = isOnKeyguard) }
-            }
-
-            if (isOnKeyguard != frameDelegate.commonState.wasOnKeyguard) {
-                frameDelegate.updateCommonState { it.copy(wasOnKeyguard = isOnKeyguard) }
-                //Update the keyguard dismissal Activity that the lock screen
-                //has been dismissed.
-                if (!isOnKeyguard) {
-                    eventManager.sendEvent(Event.LockscreenDismissed)
-                }
-            }
-
-            val rotation = defaultDisplayCompat.rotation
-            frameDelegate.updateCommonState { it.copy(screenOrientation = rotation) }
-            drawerDelegate.updateCommonState { it.copy(screenOrientation = rotation) }
-
-            if (isDebug && event != null) {
-                // Nest this in the debug check so that loop doesn't have to run always.
-                try {
-                    logUtils.debugLog("Source Node ID: ${event.sourceNodeId}, Window ID: ${event.windowId}, Source ID Name: ${event.source?.viewIdResourceName}")
-                    logUtils.debugLog(
-                        "Records: ${
-                            run {
-                                val records = ArrayList<String>()
-                                for (i in 0 until event.recordCount) {
-                                    val record = event.getRecord(i)
-                                    records.add("$record ${record.sourceNodeId} ${record.windowId} ${record.source?.viewIdResourceName}")
-                                }
-                                records.joinToString(",,,,,,,,")
-                            }
-                        }"
-                    )
-                } catch (e: Exception) {
-                    logUtils.debugLog("Error printing debug info", e)
-                }
-            }
-
-            logUtils.debugLog("Accessibility event: $event, isScreenOn: ${isScreenOn}, wasOnKeyguard: $isOnKeyguard, ${drawerDelegate.state}")
-
-            frameDelegate.updateStateAndWindowState(
-                wm = wm,
-                updateAccessibility = true,
-            )
-
-            //The below block can (very rarely) take over half a second to execute, so only run it
-            //if we actually need to (i.e. on the lock screen and screen is on).
-            if ((isOnKeyguard || prefManager.showInNotificationCenter) && isScreenOn && prefManager.widgetFrameEnabled /* This is only needed when the frame is enabled */) {
-                val windowInfo = getWindows()?.let {
-                    getWindows(it, isOnKeyguard).also { windowInfo ->
-                        logUtils.debugLog("Got windows $windowInfo", null)
+            windowInfo?.sysUiWindowViewIds?.let { sysUiWindowViewIds ->
+                logUtils.debugLog("Found IDs\n${sysUiWindowViewIds.joinToString("\n")}", null)
+                //Update any ID list widgets on the new IDs
+                coroutineScope {
+                    launch {
+                        eventManager.sendEvent(Event.DebugIdsUpdated(sysUiWindowViewIds))
+                        IDListProvider.sendUpdate(this@runWindowOperation)
                     }
+                }
+            }
+
+            if (isDebug) {
+                windowInfo?.sysUiWindowNodes?.let { sysUiWindowNodes ->
+                    logUtils.debugLog(
+                        sysUiWindowNodes.filter { it.isVisibleToUser }.map { it.viewIdResourceName }
+                            .toString(),
+                        null,
+                    )
                 }
 
                 windowInfo?.sysUiWindowViewIds?.let { sysUiWindowViewIds ->
-                    //Update any ID list widgets on the new IDs
                     coroutineScope {
-                        launch {
-                            eventManager.sendEvent(Event.DebugIdsUpdated(sysUiWindowViewIds))
-                            IDListProvider.sendUpdate(context)
-                        }
-                    }
-                }
-
-                if (isDebug) {
-                    windowInfo?.sysUiWindowNodes?.let { sysUiWindowNodes ->
-                        logUtils.debugLog(
-                            sysUiWindowNodes.filter { it.isVisibleToUser }.map { it.viewIdResourceName }
-                                .toString()
-                        )
-                    }
-
-                    windowInfo?.sysUiWindowViewIds?.let { sysUiWindowViewIds ->
-                        coroutineScope {
-                            launch(Dispatchers.Main) {
+                        launch(Dispatchers.Main) {
+                            frameDelegates.forEach { (_, frameDelegate) ->
                                 frameDelegate.setNewDebugIdItems(sysUiWindowViewIds.toList())
                             }
                         }
                     }
                 }
+            }
 
-                windowInfo?.let {
+            windowInfo?.let {
+                val notificationsWereOpen = frameDelegates.any { it.value.state.showingNotificationsPanel }
+                val notificationsAreOpen = windowInfo.nodeState.showingNotificationsPanel.value
+
+                frameDelegates.forEach { (_, frameDelegate) ->
                     frameDelegate.updateState {
                         it.copy(
                             //Samsung's Screen-Off Memo is really just a normal Activity that shows over the lock screen.
@@ -437,7 +403,7 @@ object AccessibilityUtils {
                             //currentAppLayer check. Explicitly check for its existence here.
                             isOnScreenOffMemo = isOnKeyguard && windowInfo.hasScreenOffMemoWindow,
                             isOnEdgePanel = windowInfo.hasEdgePanelWindow,
-                            isOnFaceWidgets = windowInfo.hasFaceWidgetsWindow,
+                            isOnFaceWidgets = windowInfo.hasFaceWidgetsWindow || windowInfo.nodeState.onFaceWidgets.value,
                             //Generate "layer" values for the System UI window and for the topmost app window, if
                             //it exists.
                             //currentAppLayer *should* be -1 even if there's an app open in the background,
@@ -452,48 +418,165 @@ object AccessibilityUtils {
                             currentAppPackage = windowInfo.topAppWindowPackageName,
                             hidingForPresentApp = windowInfo.hasHideForPresentApp,
                             onMainLockscreen = windowInfo.nodeState.onMainLockscreen.value,
-                            showingNotificationsPanel = windowInfo.nodeState.showingNotificationsPanel.value,
-                            notificationsPanelFullyExpanded = windowInfo.nodeState.hasMoreButton.value && !windowInfo.nodeState.hasClearAllButton.value,
+                            showingNotificationsPanel = notificationsAreOpen,
+                            notificationsPanelFullyExpanded = (windowInfo.nodeState.hasMoreButton.value) || (windowInfo.nodeState.hasSettingsContainerButton.value &&
+                                    !windowInfo.nodeState.hasClearAllButton.value),
                             hideForPresentIds = windowInfo.nodeState.hideForPresentIds.value,
                             hideForNonPresentIds = windowInfo.nodeState.hideForNonPresentIds.value,
                         )
                     }
+
+                    frameDelegate.updateStateAndWindowState(
+                        wm = wm,
+                        updateAccessibility = true,
+                    )
                 }
 
-                logUtils.debugLog("NewState ${frameDelegate.state}", null)
+                if (!drawerDelegate.scrollingOpen &&
+                    notificationsWereOpen != notificationsAreOpen &&
+                    notificationsAreOpen &&
+                    drawerDelegate.isAttached &&
+                    prefManager.drawerHideWhenNotificationPanelOpen) {
+                    eventManager.sendEvent(Event.CloseDrawer)
+                }
+            }
 
+            logUtils.debugLog("NewState ${frameDelegates.values.first().state}", null)
+
+            windowInfo?.let {
+                windowInfo.sysUiWindowNodes.forEachParallel { node ->
+                    try {
+                        node.isSealed = false
+                    } catch (_: Throwable) {}
+
+                    try {
+                        @Suppress("DEPRECATION")
+                        node.recycle()
+                    } catch (_: IllegalStateException) {}
+                }
+
+                windowInfo.windows.forEachParallel {
+                    try {
+                        it.root?.isSealed = false
+                    } catch (_: Throwable) {}
+
+                    try {
+                        @Suppress("DEPRECATION")
+                        it.root?.recycle()
+                    } catch (_: IllegalStateException) {}
+                }
+            }
+        }
+    }
+
+    fun CoroutineScope.runAccessibilityJob(
+        context: Context,
+        event: AccessibilityEvent,
+        frameDelegates: Map<Int, MainWidgetFrameDelegate>,
+        drawerDelegate: DrawerDelegate,
+        power: PowerManager,
+        kgm: KeyguardManager,
+        wm: WindowManager,
+        imm: InputMethodManager,
+        getWindows: () -> List<AccessibilityWindowInfo>?,
+    ) = async(Dispatchers.Main) {
+        with(context) {
+            logUtils.debugLog("Running accessibility job")
+
+            //This block here runs even when unlocked, but it only takes a millisecond at most,
+            //so it shouldn't be noticeable to the user. We use this to check the current keyguard
+            //state and, if applicable, send the keyguard dismissal broadcast.
+            val rotation = defaultDisplayCompat.rotation
+
+            frameDelegates.forEach { (_, frameDelegate) ->
+                frameDelegate.updateState {
+                    try {
+                        it.copy(showingKeyboard = imm.inputMethodWindowVisibleHeight > 0)
+                    } catch (_: Throwable) {
+                        // Fetching the IME height can cause the system to throw an NPE:
+                        // "Attempt to read from field 'com.android.server.wm.DisplayFrames com.android.server.wm.DisplayContent.mDisplayFrames' on a null object reference".
+                        // If this happens, assume the keyboard isn't showing.
+                        it.copy(showingKeyboard = false)
+                    }
+                }
+                frameDelegate.updateCommonState { it.copy(screenOrientation = rotation) }
+            }
+
+            drawerDelegate.updateCommonState { it.copy(screenOrientation = rotation) }
+
+            //Check if the screen is on.
+            val isScreenOn = power.isInteractive
+            if (frameDelegates.values.first().commonState.isScreenOn != isScreenOn) {
+                frameDelegates.forEach { (_, frameDelegate) ->
+                    //Make sure to turn off temp hide if it was on.
+                    frameDelegate.updateState { it.copy(isTempHide = false) }
+                    frameDelegate.updateCommonState { it.copy(isScreenOn = isScreenOn) }
+                }
+
+                drawerDelegate.updateCommonState { it.copy(isScreenOn = isScreenOn) }
+            }
+
+            //Check if the lock screen is shown.
+            val isOnKeyguard = kgm.isKeyguardLocked
+
+            if (isOnKeyguard != frameDelegates.values.first().commonState.wasOnKeyguard) {
+                drawerDelegate.updateCommonState { it.copy(wasOnKeyguard = isOnKeyguard) }
+                frameDelegates.forEach { (_, frameDelegate) ->
+                    frameDelegate.updateCommonState { it.copy(wasOnKeyguard = isOnKeyguard) }
+                }
+
+                //Update the keyguard dismissal Activity that the lock screen
+                //has been dismissed.
+                if (!isOnKeyguard) {
+                    eventManager.sendEvent(Event.LockscreenDismissed)
+                }
+            }
+
+            if (isDebug) {
+                // Nest this in the debug check so that loop doesn't have to run always.
+                try {
+                    logUtils.debugLog("Source Node ID: ${event.sourceNodeId}, Window ID: ${event.windowId}, Source ID Name: ${event.source?.viewIdResourceName}", null)
+
+                    if (event.recordCount > 0) {
+                        logUtils.debugLog(
+                            "Records: ${
+                                run {
+                                    val records = ArrayList<String>()
+                                    for (i in 0 until event.recordCount) {
+                                        val record = event.getRecord(i)
+                                        records.add("$record ${record.sourceNodeId} ${record.windowId} ${record.source?.viewIdResourceName}")
+                                    }
+                                    records.joinToString(",,,,,,,,")
+                                }
+                            }",
+                            null,
+                        )
+                    }
+                } catch (e: Exception) {
+                    logUtils.debugLog("Error printing debug info", e)
+                }
+            }
+
+            logUtils.debugLog("Accessibility event: $event, isScreenOn: ${isScreenOn}, wasOnKeyguard: $isOnKeyguard, ${drawerDelegate.state}", null)
+
+            frameDelegates.forEach { (_, frameDelegate) ->
                 frameDelegate.updateStateAndWindowState(
                     wm = wm,
                     updateAccessibility = true,
                 )
-
-                windowInfo?.let {
-                    windowInfo.sysUiWindowNodes.forEachParallel { node ->
-                        try {
-                            node.isSealed = false
-                        } catch (_: Throwable) {}
-
-                        try {
-                            @Suppress("DEPRECATION")
-                            node.recycle()
-                        } catch (_: IllegalStateException) {}
-                    }
-
-                    windowInfo.windows.forEachParallel {
-                        try {
-                            it.root?.isSealed = false
-                        } catch (_: Throwable) {}
-
-                        try {
-                            @Suppress("DEPRECATION")
-                            it.root?.recycle()
-                        } catch (_: IllegalStateException) {}
-                    }
-                }
             }
 
+            runWindowOperation(
+                wm = wm,
+                frameDelegates = frameDelegates,
+                drawerDelegate = drawerDelegate,
+                isOnKeyguard = isOnKeyguard,
+                isScreenOn = isScreenOn,
+                getWindows = getWindows,
+            )
+
             // Some logic for making the drawer go away or system dialogs dismiss when widgets launch Activities indirectly.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && event != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val matchesWindowsChanged =
                     event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
                             && ((event.windowChanges and AccessibilityEvent.WINDOWS_CHANGE_ADDED != 0)
@@ -507,43 +590,107 @@ object AccessibilityUtils {
                             "matchesWindowStateChanged: $matchesWindowStateChanged\n" +
                             "packageName: ${event.packageName}\n" +
                             "handlingDrawerClick: ${drawerDelegate.commonState.handlingClick}\n" +
-                            "handlingFrameClick: ${frameDelegate.commonState.handlingClick}"
+                            "handlingFrameClick: ${frameDelegates.any { (_, it) -> it.commonState.handlingClick }}",
+                    null,
                 )
 
                 if ((matchesWindowsChanged || matchesWindowStateChanged)
                     && event.packageName != packageName
-                    && (drawerDelegate.commonState.handlingClick || frameDelegate.commonState.handlingClick)
+                    && (drawerDelegate.commonState.handlingClick || frameDelegates.any { (_, it) -> it.commonState.handlingClick })
                 ) {
-                    logUtils.debugLog("Starting dismiss Activity because of window change.")
+                    logUtils.debugLog("Starting dismiss Activity because of window change.", null)
                     DismissOrUnlockActivity.launch(context)
 
                     if (drawerDelegate.commonState.handlingClick) {
-                        logUtils.debugLog("Hiding drawer because of window change")
+                        logUtils.debugLog("Hiding drawer because of window change", null)
                         eventManager.sendEvent(Event.CloseDrawer)
                     }
 
                     drawerDelegate.updateCommonState { it.copy(handlingClick = false) }
-                    frameDelegate.updateCommonState { it.copy(handlingClick = false) }
+                    frameDelegates.forEach { (_, frameDelegate) ->
+                        frameDelegate.updateCommonState { it.copy(handlingClick = false) }
+                    }
                 }
             }
 
-            if (event != null && (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
-                        || event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
-                && event.packageName != null
+            if ((event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
+                        || event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) && event.packageName != null
             ) {
                 drawerDelegate.updateCommonState { it.copy(handlingClick = false) }
-                frameDelegate.updateCommonState { it.copy(handlingClick = false) }
+                frameDelegates.forEach { (_, frameDelegate) ->
+                    frameDelegate.updateCommonState { it.copy(handlingClick = false) }
+                }
             }
 
             try {
                 //Make sure to recycle the copy of the event.
                 @Suppress("DEPRECATION")
-                event?.recycle()
-            } catch (e: IllegalStateException) {
+                event.recycle()
+            } catch (_: IllegalStateException) {
                 //Sometimes the event is already recycled somehow.
             }
 
-            frameDelegate.updateStateAndWindowState(wm, true)
+            frameDelegates.forEach { (_, frameDelegate) ->
+                frameDelegate.updateStateAndWindowState(wm, true)
+            }
         }
     }
+}
+
+//Check if the Accessibility service is enabled
+val Context.isAccessibilityEnabled: Boolean
+    get() = Settings.Secure.getString(
+        contentResolver,
+        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+    )?.contains(ComponentName(this, Accessibility::class.java).flattenToString()) == true
+
+fun Context.openAccessibilitySettings() {
+    //Samsung devices have a separate Activity for listing
+    //installed Accessibility Services, for some reason.
+    //It's exported and permission-free, at least on Android 10,
+    //so attempt to launch it. A "dumb" try-catch is simpler
+    //than a check for the existence and state of this Activity.
+    //If the Installed Services Activity can't be launched,
+    //just launch the normal Accessibility Activity.
+    try {
+        val accIntent = Intent(Intent.ACTION_MAIN)
+        accIntent.`package` = "com.android.settings"
+        accIntent.component = ComponentName(
+            "com.android.settings",
+            "com.android.settings.Settings\$AccessibilityInstalledServiceActivity"
+        )
+        startActivity(accIntent)
+    } catch (e: Exception) {
+        logUtils.debugLog("Error opening Installed Services:", e)
+        val accIntent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+        startActivity(accIntent)
+    }
+}
+
+fun <T> AccessibilityNodeInfo?.use(block: (AccessibilityNodeInfo?) -> T): T {
+    val result = block(this)
+    @Suppress("DEPRECATION")
+    this?.recycle()
+    return result
+}
+
+fun AccessibilityEvent.copyCompat(): AccessibilityEvent {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        AccessibilityEvent(this)
+    } else {
+        @Suppress("DEPRECATION")
+        AccessibilityEvent.obtain(this)
+    }
+}
+
+fun AccessibilityNodeInfo.hasVisibleIds(vararg ids: String): Boolean {
+    return ids.contains(viewIdResourceName) && isVisibleToUser
+}
+
+fun AccessibilityNodeInfo.hasWildcardId(id: String): Boolean {
+    return viewIdResourceName?.contains(id) == true && isVisibleToUser
+}
+
+fun AccessibilityNodeInfo.hasVisibleIds(ids: Iterable<String>): Boolean {
+    return ids.contains(viewIdResourceName) && isVisibleToUser
 }

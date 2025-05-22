@@ -6,10 +6,8 @@ import android.app.IWallpaperManagerCallback
 import android.app.WallpaperColors
 import android.app.WallpaperManager
 import android.content.Context
-import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
@@ -17,13 +15,13 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.ServiceManager
-import android.os.UserHandle
 import androidx.annotation.RequiresApi
+import androidx.core.graphics.drawable.toDrawable
 
 val Context.wallpaperUtils: WallpaperUtils
     get() = WallpaperUtils.getInstance(this)
 
-class WallpaperUtils private constructor(context: Context) : ContextWrapper(context) {
+class WallpaperUtils private constructor(private val context: Context) {
     companion object {
         @SuppressLint("StaticFieldLeak")
         private var instance: WallpaperUtils? = null
@@ -39,15 +37,22 @@ class WallpaperUtils private constructor(context: Context) : ContextWrapper(cont
     private val iWallpaper = IWallpaperManager.Stub.asInterface(
         ServiceManager.getService(Context.WALLPAPER_SERVICE)
     )
-    private val wallpaper = getSystemService(Context.WALLPAPER_SERVICE) as WallpaperManager
+    private val wallpaper = context.getSystemService(Context.WALLPAPER_SERVICE) as WallpaperManager
     private val callback = object : IWallpaperManagerCallback.Stub() {
         // "Fix" for Huawei.
         @Suppress("unused")
         fun onBlurWallpaperChanged() {}
+
+        // "Fix" for Honor.
+        @Suppress("unused")
+        fun onWallpaperChanged(value: Int) {
+            onWallpaperChanged()
+        }
+
         override fun onWallpaperColorsChanged(colors: WallpaperColors?, which: Int, userId: Int) {}
 
         override fun onWallpaperChanged() {
-            logUtils.debugLog("Wallpaper changed, clearing cache.")
+            context.logUtils.debugLog("Wallpaper changed, clearing cache.", null)
             cachedWallpaper = null
         }
     }
@@ -65,9 +70,7 @@ class WallpaperUtils private constructor(context: Context) : ContextWrapper(cont
         @SuppressLint("MissingPermission")
         get() {
             return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                peekWallpaperBitmap()?.let {
-                    BitmapDrawable(resources, it)
-                } ?: wallpaper.drawable
+                peekWallpaperBitmap()?.toDrawable(context.resources) ?: wallpaper.drawable
             } else {
                 wallpaper.drawable
             }
@@ -76,10 +79,10 @@ class WallpaperUtils private constructor(context: Context) : ContextWrapper(cont
     @RequiresApi(Build.VERSION_CODES.N)
     private fun peekWallpaperBitmap(): Bitmap? {
         return if (cachedWallpaper != null && cachedWallpaper?.isRecycled == false) {
-            logUtils.debugLog("Using cached wallpaper.")
+            context.logUtils.debugLog("Using cached wallpaper.")
             cachedWallpaper
         } else {
-            logUtils.debugLog("Retrieving new wallpaper; isRecycled: ${cachedWallpaper?.isRecycled}.")
+            context.logUtils.debugLog("Retrieving new wallpaper; isRecycled: ${cachedWallpaper?.isRecycled}.")
             val lockWallpaper = getWallpaper(WallpaperManager.FLAG_LOCK)
             val systemWallpaper = getWallpaper(WallpaperManager.FLAG_SYSTEM)
             val desc = lockWallpaper ?: systemWallpaper
@@ -88,7 +91,7 @@ class WallpaperUtils private constructor(context: Context) : ContextWrapper(cont
                 desc?.let { pfd ->
                     pfd.fileDescriptor?.let { fd ->
                         BitmapFactory.decodeFileDescriptor(fd)?.also { bmp ->
-                            logUtils.debugLog("Caching new wallpaper $bmp.")
+                            context.logUtils.debugLog("Caching new wallpaper $bmp.", null)
                             cachedWallpaper = bmp
                         }
                     }
@@ -107,11 +110,11 @@ class WallpaperUtils private constructor(context: Context) : ContextWrapper(cont
         @Suppress("DEPRECATION")
         fun old(): ParcelFileDescriptor? {
             return iWallpaper.getWallpaper(
-                packageName,
+                context.packageName,
                 callback,
                 flag,
                 bundle,
-                UserHandle.getCallingUserId()
+                context.userId,
             )
         }
 
@@ -120,12 +123,12 @@ class WallpaperUtils private constructor(context: Context) : ContextWrapper(cont
             return try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                     iWallpaper.getWallpaperWithFeature(
-                        packageName,
-                        attributionTag,
+                        context.packageName,
+                        context.attributionTag,
                         callback,
                         flag,
                         bundle,
-                        UserHandle.getCallingUserId(),
+                        context.userId,
                         true,
                     )
                 } else {
@@ -136,12 +139,15 @@ class WallpaperUtils private constructor(context: Context) : ContextWrapper(cont
                         Int::class.java, Bundle::class.java, Int::class.java,
                     ).invoke(
                         iWallpaper,
-                        packageName, attributionTag, callback,
-                        flag, bundle, UserHandle.getCallingUserId(),
+                        context.packageName,
+                        @SuppressLint("NewApi")
+                        context.attributionTag,
+                        callback,
+                        flag, bundle, context.userId,
                     ) as? ParcelFileDescriptor
                 }
-            } catch (e: NoSuchMethodError) {
-                logUtils.debugLog("Missing getWallpaperWithFeature, using getWallpaper instead.")
+            } catch (_: NoSuchMethodError) {
+                context.logUtils.debugLog("Missing getWallpaperWithFeature, using getWallpaper instead.", null)
                 old()
             }
         }
@@ -151,15 +157,15 @@ class WallpaperUtils private constructor(context: Context) : ContextWrapper(cont
         //always work. Thus the try-catch.
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                withFeature()
+                withFeature() ?: old()
             } else {
                 old()
             }
         } catch (e: Exception) {
-            logUtils.normalLog("Error retrieving wallpaper", e)
+            context.logUtils.normalLog("Error retrieving wallpaper", e)
             null
         } catch (e: NoSuchMethodError) {
-            logUtils.normalLog("Error retrieving wallpaper", e)
+            context.logUtils.normalLog("Error retrieving wallpaper", e)
             null
         }
     }

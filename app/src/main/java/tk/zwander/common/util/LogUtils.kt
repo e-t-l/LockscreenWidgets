@@ -3,6 +3,7 @@ package tk.zwander.common.util
 import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
+import com.bugsnag.android.BreadcrumbType
 import com.bugsnag.android.Bugsnag
 import java.io.BufferedWriter
 import java.io.File
@@ -72,8 +73,14 @@ class LogUtils private constructor(private val context: Context) {
 
     private fun createLogFileWriter(): BufferedWriter = FileOutputStream(logFile, true).bufferedWriter()
 
-    fun debugLog(message: String, throwable: Throwable? = Exception()) {
-        Bugsnag.leaveBreadcrumb(message)
+    fun debugLog(message: String, throwable: Throwable? = DefaultException(), leaveBreadcrumb: Boolean = true) {
+        if (leaveBreadcrumb) {
+            Bugsnag.leaveBreadcrumb(
+                message,
+                throwable?.takeIf { it !is DefaultException }?.let { mapOf("error" to throwable.stringify()) } ?: mapOf(),
+                BreadcrumbType.LOG,
+            )
+        }
 
         if (context.isDebug) {
             val fullMessage = generateFullMessage(message, throwable)
@@ -81,20 +88,27 @@ class LogUtils private constructor(private val context: Context) {
             Log.e(DEBUG_LOG_TAG, fullMessage)
 
             synchronized(logFile) {
-                logFileHandle.write("\n\n$fullMessage")
+                logFileHandle.writeSafely("\n\n$fullMessage")
             }
         }
     }
 
-    fun normalLog(message: String, throwable: Throwable? = Exception()) {
+    fun normalLog(message: String, throwable: Throwable? = DefaultException(), leaveBreadcrumb: Boolean = true, logToFile: Boolean = false) {
         val fullMessage = generateFullMessage(message, throwable)
 
         Log.e(NORMAL_LOG_TAG, fullMessage)
-        Bugsnag.leaveBreadcrumb(message)
 
-        if (context.isDebug) {
+        if (leaveBreadcrumb) {
+            Bugsnag.leaveBreadcrumb(
+                message,
+                throwable?.takeIf { it !is DefaultException }?.let { mapOf("error" to throwable.stringify()) } ?: mapOf(),
+                BreadcrumbType.ERROR,
+            )
+        }
+
+        if (context.isDebug || logToFile) {
             synchronized(logFile) {
-                logFileHandle.write("\n\n$fullMessage")
+                logFileHandle.writeSafely("\n\n$fullMessage")
             }
         }
     }
@@ -114,6 +128,7 @@ class LogUtils private constructor(private val context: Context) {
                     }
                 } catch (e: Exception) {
                     Log.e(NORMAL_LOG_TAG, "Failed to export log.", e)
+                    Bugsnag.leaveBreadcrumb("Unable to export log.", mapOf("error" to e.stringify()), BreadcrumbType.ERROR)
                 }
             }
         }
@@ -126,4 +141,15 @@ class LogUtils private constructor(private val context: Context) {
             "\n${Log.getStackTraceString(it)}"
         } ?: ""}"
     }
+
+    private fun BufferedWriter.writeSafely(string: String) {
+        try {
+            write(string)
+            flush()
+        } catch (e: Exception) {
+            Bugsnag.leaveBreadcrumb("Unable to write to log file.", mapOf("error" to e.stringify()), BreadcrumbType.ERROR)
+        }
+    }
+
+    class DefaultException : Exception()
 }

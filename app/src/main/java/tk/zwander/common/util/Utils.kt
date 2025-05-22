@@ -6,6 +6,7 @@ import android.appwidget.AppWidgetProviderInfo
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.hardware.display.DisplayManagerGlobal
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -18,6 +19,8 @@ import android.widget.AbsListView
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityOptionsCompat
+import androidx.core.net.toUri
+import com.google.gson.GsonBuilder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
@@ -42,7 +45,7 @@ val Context.isDebug: Boolean
 fun Context.launchUrl(url: String) {
     try {
         val browserIntent =
-            Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            Intent(Intent.ACTION_VIEW, url.toUri())
         startActivity(browserIntent)
     } catch (e: Exception) {
         logUtils.debugLog("Unable to launch URL", e)
@@ -54,7 +57,7 @@ fun Context.launchUrl(url: String) {
 fun Context.launchEmail(to: String, subject: String) {
     try {
         val intent = Intent(Intent.ACTION_SENDTO)
-        intent.setDataAndType(Uri.parse("mailto:${Uri.encode(to)}?subject=${Uri.encode(subject)}"), "text/plain")
+        intent.setDataAndType("mailto:${Uri.encode(to)}?subject=${Uri.encode(subject)}".toUri(), "text/plain")
 
         startActivity(intent)
     } catch (e: Exception) {
@@ -69,6 +72,7 @@ fun Context.launchEmail(to: String, subject: String) {
 //If the integer is even, return itself.
 //If the integer is odd and negative, return itself - 1
 //If the integer is odd and positive, return itself + 1
+@Suppress("KotlinConstantConditions")
 fun Int.makeEven(): Int {
     return when {
         this == 0 -> 0
@@ -103,22 +107,25 @@ suspend inline fun <T, S> Collection<T>.mapIndexedParallel(crossinline action: s
 }
 
 val Context.safeApplicationContext: Context
-    get() = if (this is Application) this else applicationContext
+    get() = this as? Application ?: applicationContext
 
 fun AppWidgetProviderInfo.loadPreviewOrIcon(context: Context, density: Int = 0, maxSize: Dp = 128.dp): Bitmap? {
-    return with (context) { (loadPreviewImage(context, density) ?: loadIcon(context, density))?.toSafeBitmap(maxSize = maxSize) }
+    return (loadPreviewImage(context, density) ?: loadIcon(context, density))?.toSafeBitmap(context.density, maxSize = maxSize)
 }
 
 fun AppWidgetProviderInfo.createPersistablePreviewBitmap(context: Context): String? {
     return loadPreviewOrIcon(context, maxSize = 128.dp)?.toBase64()
 }
 
-@Suppress("DEPRECATION")
 val Context.defaultDisplayCompat: Display
-    get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        displayNoVerify
-    } else {
-        windowManager.defaultDisplay
+    get() {
+        val displayId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            displayNoVerify?.displayId ?: Display.DEFAULT_DISPLAY
+        } else {
+            Display.DEFAULT_DISPLAY
+        }
+
+        return DisplayManagerGlobal.getInstance().getRealDisplay(displayId)
     }
 
 fun Context.vibrate(duration: Long = 50L) {
@@ -154,3 +161,7 @@ val ActivityOptionsCompat.internalActivityOptions: ActivityOptions?
             .apply { isAccessible = true }
             .get(this) as? ActivityOptions
     }
+
+fun Throwable.stringify(): String {
+    return GsonBuilder().create().toJson(this)
+}

@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.view.MenuItem
 import androidx.activity.compose.setContent
 import androidx.compose.ui.unit.dp
+import com.bugsnag.android.performance.compose.MeasuredComposable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
@@ -13,8 +14,11 @@ import tk.zwander.common.activities.DismissOrUnlockActivity
 import tk.zwander.common.compose.add.AddWidgetLayout
 import tk.zwander.common.data.WidgetData
 import tk.zwander.common.data.WidgetSizeData
+import tk.zwander.common.util.componentNameCompat
+import tk.zwander.common.util.density
 import tk.zwander.common.util.shortcutIdManager
 import tk.zwander.common.util.toSafeBitmap
+import tk.zwander.lockscreenwidgets.data.list.LauncherItemListInfo
 import tk.zwander.lockscreenwidgets.data.list.LauncherShortcutListInfo
 import tk.zwander.lockscreenwidgets.data.list.ShortcutListInfo
 import tk.zwander.lockscreenwidgets.data.list.WidgetListInfo
@@ -35,27 +39,40 @@ abstract class AddWidgetActivity : BaseBindWidgetActivity(), CoroutineScope by M
         DismissOrUnlockActivity.launch(this)
 
         setContent {
-            AddWidgetLayout(
-                showShortcuts = showShortcuts,
-                onBack = onBackPressedDispatcher::onBackPressed,
-            ) {
-                when (it) {
-                    is WidgetListInfo -> {
-                        tryBindWidget(it.itemInfo)
-                    }
-                    is ShortcutListInfo -> {
-                        tryBindShortcut(it)
-                    }
-                    is LauncherShortcutListInfo -> {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
-                            val shortcut = WidgetData.shortcut(
+            MeasuredComposable(name = "AddWidgetLayout") {
+                AddWidgetLayout(
+                    showShortcuts = showShortcuts,
+                    onBack = onBackPressedDispatcher::onBackPressed,
+                ) {
+                    when (it) {
+                        is WidgetListInfo -> {
+                            tryBindWidget(it.itemInfo)
+                        }
+                        is ShortcutListInfo -> {
+                            tryBindShortcut(it)
+                        }
+                        is LauncherItemListInfo -> {
+                            val item = WidgetData.launcherItem(
                                 shortcutIdManager.allocateShortcutId(),
-                                it.name, it.icon?.loadDrawable(this)?.toSafeBitmap(maxSize = 128.dp),
-                                null, it.itemInfo.intent,
-                                WidgetSizeData(1, 1)
+                                it.appInfo.appInfo.packageName,
+                                it.itemInfo.componentInfo.componentNameCompat,
+                                WidgetSizeData(1, 1),
                             )
 
-                            addNewShortcut(shortcut)
+                            addNewShortcut(item)
+                        }
+                        is LauncherShortcutListInfo -> {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
+                                val shortcut = WidgetData.shortcut(
+                                    this@AddWidgetActivity,
+                                    shortcutIdManager.allocateShortcutId(),
+                                    it.name, it.icon?.loadDrawable(this@AddWidgetActivity)?.toSafeBitmap(density, maxSize = 128.dp),
+                                    null, it.itemInfo.intent,
+                                    WidgetSizeData(1, 1)
+                                )
+
+                                addNewShortcut(shortcut)
+                            }
                         }
                     }
                 }

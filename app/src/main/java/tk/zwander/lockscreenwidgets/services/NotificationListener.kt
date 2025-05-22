@@ -18,6 +18,7 @@ import android.provider.Settings
 import android.service.notification.INotificationListener
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import com.bugsnag.android.BreadcrumbType
 import com.bugsnag.android.Bugsnag
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CoroutineScope
@@ -33,13 +34,14 @@ import tk.zwander.common.util.Event
 import tk.zwander.common.util.EventObserver
 import tk.zwander.common.util.eventManager
 import tk.zwander.common.util.logUtils
+import tk.zwander.common.util.stringify
 
 //Check if the notification listener service is enabled
 val Context.isNotificationListenerActive: Boolean
     get() = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")?.run {
         val cmp = ComponentName(this@isNotificationListenerActive, NotificationListener::class.java)
         contains(cmp.flattenToString()) || contains(cmp.flattenToShortString())
-    } ?: false
+    } == true
 
 /**
  * Used to notify the Accessibility service about changes in notification count,
@@ -50,7 +52,7 @@ val Context.isNotificationListenerActive: Boolean
  */
 @Suppress("unused")
 class NotificationListener : NotificationListenerService(), EventObserver, CoroutineScope by MainScope() {
-    private val nm by lazy { getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager }
+    private val nm by lazy { getSystemService(NOTIFICATION_SERVICE) as NotificationManager }
     private val handler by lazy { Handler(Looper.getMainLooper()) }
 
     private val isListening = atomic(false)
@@ -95,7 +97,7 @@ class NotificationListener : NotificationListenerService(), EventObserver, Corou
                                 .withParameters(Int::class.java, Parcel::class.java, Parcel::class.java, Int::class.java)
                                 .intercept(MethodDelegation.to(LollipopListenerWrapper(original as INotificationListener.Stub)))
                                 .make()
-                                .load(wrapperClass.classLoader, ClassLoadingStrategy.ForUnsafeInjection())
+                                .load(NotificationListenerService::class.java.classLoader, ClassLoadingStrategy.Default.CHILD_FIRST)
                                 .loaded
                                 .getDeclaredConstructor()
                                 .apply { isAccessible = true }
@@ -177,7 +179,7 @@ class NotificationListener : NotificationListenerService(), EventObserver, Corou
                     logUtils.normalLog("Error sending notification count update", e)
                 } catch (e: Throwable) {
                     logUtils.normalLog("Error sending notification count update", e)
-                    Bugsnag.notify(e)
+                    Bugsnag.leaveBreadcrumb("Error sending notification count update", mapOf("error" to e.stringify()), BreadcrumbType.ERROR)
                 }
             }
         }
@@ -254,11 +256,12 @@ class NotificationListener : NotificationListenerService(), EventObserver, Corou
             return true
         }
 
-    private inner class NougatListenerWrapper : NotificationListenerService.NotificationListenerWrapper() {
-        override fun onTransact(code: Int, data: Parcel?, reply: Parcel?, flags: Int): Boolean {
+    private inner class NougatListenerWrapper : NotificationListenerWrapper() {
+        override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
             return try {
                 super.onTransact(code, data, reply, flags)
             } catch (e: Throwable) {
+                Bugsnag.leaveBreadcrumb("Unable to receive notification update", mapOf("error" to e.stringify()), BreadcrumbType.ERROR)
                 false
             }
         }
@@ -266,10 +269,11 @@ class NotificationListener : NotificationListenerService(), EventObserver, Corou
 
     // Public to allow ByteBuddy wrapping
     inner class LollipopListenerWrapper(private val wrapper: INotificationListener.Stub) {
-        fun onTransact(code: Int, data: Parcel?, reply: Parcel?, flags: Int): Boolean {
+        fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
             return try {
                 wrapper.onTransact(code, data, reply, flags)
             } catch (e: Throwable) {
+                Bugsnag.leaveBreadcrumb("Unable to receive notification update", mapOf("error" to e.stringify()), BreadcrumbType.ERROR)
                 false
             }
         }

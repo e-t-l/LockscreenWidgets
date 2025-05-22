@@ -1,5 +1,6 @@
 package tk.zwander.common.tiles.widget
 
+import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.appwidget.AppWidgetHost.AppWidgetHostListener
 import android.appwidget.AppWidgetProviderInfo
@@ -25,6 +26,7 @@ import tk.zwander.common.host.widgetHostCompat
 import tk.zwander.common.util.PrefManager
 import tk.zwander.common.util.appWidgetManager
 import tk.zwander.common.util.cropBitmapTransparency
+import tk.zwander.common.util.density
 import tk.zwander.common.util.getApplicationInfoInAnyState
 import tk.zwander.common.util.logUtils
 import tk.zwander.common.util.prefManager
@@ -47,7 +49,7 @@ import java.util.concurrent.atomic.AtomicReference
 abstract class BaseWidgetTile : TileService(), SharedPreferences.OnSharedPreferenceChangeListener {
     protected val iManager: IAppWidgetService by lazy {
         IAppWidgetService.Stub.asInterface(
-            ServiceManager.getService(Context.APPWIDGET_SERVICE)
+            ServiceManager.getService(APPWIDGET_SERVICE)
         )
     }
 
@@ -72,7 +74,7 @@ abstract class BaseWidgetTile : TileService(), SharedPreferences.OnSharedPrefere
                 val packageName = widgetPackage ?: return null
                 val appInfo = packageManager.getApplicationInfoInAnyState(packageName)
                 packageManager.getResourcesForApplication(appInfo)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 null
             }
         }
@@ -92,7 +94,7 @@ abstract class BaseWidgetTile : TileService(), SharedPreferences.OnSharedPrefere
                 }
 
                 override fun updateAppWidget(views: RemoteViews?) {
-                    this@BaseWidgetTile.views.set(views?.getRemoteViewsToApply(this@BaseWidgetTile, null))
+                    this@BaseWidgetTile.views.set(views?.getRemoteViewsToApplyCompat(this@BaseWidgetTile))
                     notifySystemUIOfChanges()
                 }
             }
@@ -220,7 +222,7 @@ abstract class BaseWidgetTile : TileService(), SharedPreferences.OnSharedPrefere
                 logUtils.debugLog("Custom widget loaded for tile ID $tileId")
 
                 //Success, set it.
-                outerView = widgetView.getRemoteViewsToApply(this, null)
+                outerView = widgetView.getRemoteViewsToApplyCompat(this)
             } else {
                 logUtils.debugLog("Custom widget view is null for tile ID $tileId")
                 //Error retrieving widget, or widget not selected.
@@ -258,7 +260,7 @@ abstract class BaseWidgetTile : TileService(), SharedPreferences.OnSharedPrefere
                         val iconDrawable = ResourcesCompat.getDrawable(this, icon, this.newTheme())
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && iconDrawable is AdaptiveIconDrawable) {
                             val foreground = iconDrawable.foreground
-                            qsTile?.icon = Icon.createWithBitmap(foreground.toSafeBitmap(maxSize = 128.dp).cropBitmapTransparency())
+                            qsTile?.icon = Icon.createWithBitmap(foreground.toSafeBitmap(density, maxSize = 128.dp).cropBitmapTransparency())
                         } else if (iconDrawable is BitmapDrawable) {
                             qsTile?.icon = Icon.createWithBitmap(qsTile?.label?.first()?.toString()?.textAsBitmap(128f, Color.WHITE))
                         } else {
@@ -277,5 +279,17 @@ abstract class BaseWidgetTile : TileService(), SharedPreferences.OnSharedPrefere
 
         qsTile?.state = if (widgetInfo != null) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
         qsTile?.updateTile()
+    }
+}
+
+@SuppressLint("DiscouragedPrivateApi")
+private fun RemoteViews.getRemoteViewsToApplyCompat(context: Context): RemoteViews {
+    return try {
+        getRemoteViewsToApply(context, null)
+    } catch (_: NoSuchMethodError) {
+        RemoteViews::class.java
+            .getDeclaredMethod("getRemoteViewsToApply", Context::class.java)
+            .apply { isAccessible = true }
+            .invoke(this, context) as RemoteViews
     }
 }

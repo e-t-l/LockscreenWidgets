@@ -1,3 +1,5 @@
+@file:Suppress("unused")
+
 package tk.zwander.common.util
 
 import android.content.Context
@@ -30,8 +32,8 @@ class HandlerRegistry(setup: HandlerRegistry.() -> Unit) : SharedPreferences.OnS
         items[key]?.action?.invoke(key)
     }
 
-    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String) {
-        handle(key)
+    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String?) {
+        key?.let { handle(key) }
     }
 
     fun register(context: Context) {
@@ -44,7 +46,7 @@ class HandlerRegistry(setup: HandlerRegistry.() -> Unit) : SharedPreferences.OnS
 
     data class ItemHandler(
         val keys: List<String>,
-        val action: (String) -> Unit
+        val action: (String) -> Unit,
     ) {
         constructor(key: String, action: (String) -> Unit) : this(listOf(key), action)
     }
@@ -52,4 +54,8 @@ class HandlerRegistry(setup: HandlerRegistry.() -> Unit) : SharedPreferences.OnS
 
 fun HandlerRegistry.handler(vararg keys: String, action: (String) -> Unit) {
     putHandler(HandlerRegistry.ItemHandler(keys.toList(), action))
+}
+
+fun HandlerRegistry.handler(keys: List<String>, action: (String) -> Unit) {
+    putHandler(HandlerRegistry.ItemHandler(keys, action))
 }

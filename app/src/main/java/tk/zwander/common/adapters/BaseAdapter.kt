@@ -8,7 +8,6 @@ import android.content.pm.PackageManager
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
-import android.util.AttributeSet
 import android.util.SizeF
 import android.view.ContextThemeWrapper
 import android.view.LayoutInflater
@@ -16,7 +15,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ListView
 import android.widget.Toast
-import androidx.appcompat.app.AppCompatViewInflater
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -53,11 +51,13 @@ import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
 import com.arasthel.spannedgridlayoutmanager.SpanSize
 import com.arasthel.spannedgridlayoutmanager.SpannedGridLayoutManager
+import com.bugsnag.android.performance.compose.MeasuredComposable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import tk.zwander.common.activities.DismissOrUnlockActivity
 import tk.zwander.common.activities.PermissionIntentLaunchActivity
 import tk.zwander.common.compose.AppTheme
 import tk.zwander.common.data.WidgetData
@@ -68,6 +68,7 @@ import tk.zwander.common.util.BrokenAppsRegistry
 import tk.zwander.common.util.Event
 import tk.zwander.common.util.EventObserver
 import tk.zwander.common.util.appWidgetManager
+import tk.zwander.common.util.compat.LayoutInflaterFactory2Compat
 import tk.zwander.common.util.createWidgetErrorView
 import tk.zwander.common.util.dpAsPx
 import tk.zwander.common.util.eventManager
@@ -75,6 +76,7 @@ import tk.zwander.common.util.getAllInstalledWidgetProviders
 import tk.zwander.common.util.hasConfiguration
 import tk.zwander.common.util.logUtils
 import tk.zwander.common.util.mainHandler
+import tk.zwander.common.util.mitigations.SafeContextWrapper
 import tk.zwander.common.util.pxAsDp
 import tk.zwander.lockscreenwidgets.R
 import tk.zwander.lockscreenwidgets.databinding.ComposeViewHolderBinding
@@ -83,8 +85,9 @@ import tk.zwander.lockscreenwidgets.databinding.WidgetPageHolderBinding
 import java.util.Collections
 import kotlin.math.min
 
-@Suppress("LeakingThis", "MemberVisibilityCanBePrivate")
+@Suppress("LeakingThis")
 abstract class BaseAdapter(
+    protected val holderId: Int,
     protected val context: Context,
     protected val rootView: View,
     protected val onRemoveCallback: (WidgetData, Int) -> Unit,
@@ -105,7 +108,7 @@ abstract class BaseAdapter(
 
             if (changed) {
                 mainHandler.post {
-                    context.eventManager.sendEvent(Event.EditingIndexUpdated(value))
+                    context.eventManager.sendEvent(Event.EditingIndexUpdated(value, holderId))
                 }
             }
         }
@@ -115,37 +118,18 @@ abstract class BaseAdapter(
     protected val host = context.widgetHostCompat
     protected val manager = context.appWidgetManager
 
-    private val baseLayoutInflater = LayoutInflater.from(context).cloneInContext(ContextThemeWrapper(context, R.style.AppTheme)).apply {
-        val compatInflater = AppCompatViewInflater()
-        LayoutInflaterCompat.setFactory2(
-            this,
-            object : LayoutInflater.Factory2 {
-                override fun onCreateView(
-                    parent: View?,
-                    name: String,
-                    context: Context,
-                    attrs: AttributeSet,
-                ): View? {
-                    return compatInflater.createView(
-                        parent, name, context, attrs,
-                        true, false, true, false,
-                    )
-                }
-
-                override fun onCreateView(
-                    name: String,
-                    context: Context,
-                    attrs: AttributeSet,
-                ): View? {
-                    return onCreateView(null, name, context, attrs)
-                }
-            },
-        )
-    }
+    private val baseLayoutInflater =
+        LayoutInflater.from(context).cloneInContext(ContextThemeWrapper(context, R.style.AppTheme))
+            .apply {
+                LayoutInflaterCompat.setFactory2(
+                    this,
+                    LayoutInflaterFactory2Compat(),
+                )
+            }
 
     protected abstract val colCount: Int
     protected abstract val rowCount: Int
-    protected abstract val minColSpan: Int
+    protected open val minColSpan: Int = 1
     protected abstract val minRowSpan: Int
     protected abstract val rowSpanForAddButton: Int
     protected abstract var currentWidgets: Collection<WidgetData>
@@ -171,20 +155,18 @@ abstract class BaseAdapter(
                 notifyItemRangeInserted(0, itemCount)
             } else {
                 val oldWidgets = widgets.toList()
-                this.widgets.clear()
-                this.widgets.addAll(uniqueNewWidgets)
 
                 val result = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
                     override fun areContentsTheSame(
                         oldItemPosition: Int,
-                        newItemPosition: Int
+                        newItemPosition: Int,
                     ): Boolean {
                         return oldWidgets[oldItemPosition].id == uniqueNewWidgets[newItemPosition].id
                     }
 
                     override fun areItemsTheSame(
                         oldItemPosition: Int,
-                        newItemPosition: Int
+                        newItemPosition: Int,
                     ): Boolean {
                         return oldWidgets[oldItemPosition].id == uniqueNewWidgets[newItemPosition].id
                     }
@@ -197,6 +179,9 @@ abstract class BaseAdapter(
                         return oldWidgets.size
                     }
                 }, true)
+
+                widgets.clear()
+                widgets.addAll(uniqueNewWidgets)
 
                 result.dispatchUpdatesTo(this)
             }
@@ -226,16 +211,16 @@ abstract class BaseAdapter(
     }
 
     override fun getItemCount(): Int {
-        return if (widgets.size == 0) 1 else widgets.size
+        return if (widgets.isEmpty()) 1 else widgets.size
     }
 
     override fun getItemViewType(position: Int): Int {
-        return if (widgets.size == 0) VIEW_TYPE_ADD
+        return if (widgets.isEmpty()) VIEW_TYPE_ADD
         else VIEW_TYPE_WIDGET
     }
 
     override fun getItemId(position: Int): Long {
-        return if (widgets.size == 0) {
+        return if (widgets.isEmpty()) {
             VIEW_TYPE_ADD.toLong()
         } else {
             widgets.getOrNull(position)?.id?.toLong() ?: -1
@@ -276,6 +261,8 @@ abstract class BaseAdapter(
         amount: Int,
         direction: Int,
     )
+    abstract fun launchShortcutIconOverride(id: Int)
+
     abstract fun getThresholdPx(which: WidgetResizeListener.Which): Int
 
     /**
@@ -395,7 +382,8 @@ abstract class BaseAdapter(
             val provider = data.widgetProviderComponent
 
             if (provider == null) {
-                Toast.makeText(context, R.string.error_reconfiguring_widget, Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, R.string.error_reconfiguring_widget, Toast.LENGTH_SHORT)
+                    .show()
                 context.logUtils.normalLog("Unable to reconfigure widget: provider is null.")
             } else {
                 val pkg = provider.packageName
@@ -404,7 +392,8 @@ abstract class BaseAdapter(
                         .find { info -> info.provider == provider })
 
                 if (providerInfo == null) {
-                    Toast.makeText(context, R.string.error_reconfiguring_widget, Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, R.string.error_reconfiguring_widget, Toast.LENGTH_SHORT)
+                        .show()
                     context.logUtils.normalLog("Unable to reconfigure widget $provider: provider info is null.")
                 } else {
                     launchReconfigure(data.id, providerInfo)
@@ -414,6 +403,7 @@ abstract class BaseAdapter(
 
         fun onBind(data: WidgetData) {
             launch {
+                context.logUtils.debugLog("Binding ${data.copy(icon = null, iconRes = null)}", null)
                 context.eventManager.addObserver(this@WidgetVH)
 
                 onResize(data, 0, 1)
@@ -424,6 +414,7 @@ abstract class BaseAdapter(
                 when (data.safeType) {
                     WidgetType.WIDGET -> bindWidget(data)
                     WidgetType.SHORTCUT, WidgetType.LAUNCHER_SHORTCUT -> bindShortcut(data)
+                    WidgetType.LAUNCHER_ITEM -> bindLauncherItem(data)
                     WidgetType.HEADER -> {}
                 }
 
@@ -441,16 +432,20 @@ abstract class BaseAdapter(
 
         override fun onEvent(event: Event) {
             when (event) {
-                Event.FrameMoveFinished -> {
-                    val pos = bindingAdapterPosition
+                is Event.FrameMoveFinished -> {
+                    if (event.frameId == holderId) {
+                        val pos = bindingAdapterPosition
 
-                    if (pos != -1 && pos < widgets.size) {
-                        onResize(widgets[pos], 0, 1)
+                        if (pos != -1 && pos < widgets.size) {
+                            onResize(widgets[pos], 0, 1)
+                        }
                     }
                 }
 
                 is Event.EditingIndexUpdated -> {
-                    updateEditingUI(event.index)
+                    if (event.frameId == holderId) {
+                        updateEditingUI(event.index)
+                    }
                 }
 
                 else -> {}
@@ -467,6 +462,8 @@ abstract class BaseAdapter(
         }
 
         private suspend fun bindWidget(data: WidgetData) {
+            binding.overrideIcon.isVisible = false
+
             val widgetInfo = withContext(Dispatchers.Main) {
                 try {
                     manager.getAppWidgetInfo(data.id)
@@ -483,13 +480,20 @@ abstract class BaseAdapter(
                     isVisible = true
 
                     if (!BrokenAppsRegistry.isBroken(widgetInfo)) {
-                        context.logUtils.debugLog("Attempting to create view for ${widgetInfo.provider}.", null)
+                        context.logUtils.debugLog(
+                            "Attempting to create view for ${widgetInfo.provider}.",
+                            null
+                        )
                         try {
                             // We're recreating the AppWidgetHostView here each time, which probably isn't the most efficient
                             // way to do things. However, it's not trivial to just set a new source on an AppWidgetHostView,
                             // so this makes the most sense right now.
                             addView(withContext(Dispatchers.Main) {
-                                host.createView(itemView.context, data.id, widgetInfo).apply hostView@{
+                                host.createView(
+                                    SafeContextWrapper(itemView.context),
+                                    data.id,
+                                    widgetInfo
+                                ).apply hostView@{
                                     findScrollableViewsInHierarchy(this).forEach { list ->
                                         list.isNestedScrollingEnabled = true
                                     }
@@ -541,12 +545,18 @@ abstract class BaseAdapter(
                                 }
                             })
                         } catch (e: Throwable) {
-                            context.logUtils.normalLog("Unable to bind widget view ${widgetInfo.provider}", e)
+                            context.logUtils.normalLog(
+                                "Unable to bind widget view ${widgetInfo.provider}",
+                                e
+                            )
 
                             if (e is SecurityException) {
                                 Toast.makeText(
                                     context,
-                                    resources.getString(R.string.bind_widget_error, widgetInfo.provider),
+                                    resources.getString(
+                                        R.string.bind_widget_error,
+                                        widgetInfo.provider
+                                    ),
                                     Toast.LENGTH_LONG,
                                 ).show()
                                 currentWidgets = currentWidgets.toMutableList().apply {
@@ -558,7 +568,10 @@ abstract class BaseAdapter(
                             }
                         }
                     } else {
-                        context.logUtils.normalLog("Broken app widget detected: ${widgetInfo.provider}. Removing from adapter list.", null)
+                        context.logUtils.normalLog(
+                            "Broken app widget detected: ${widgetInfo.provider}. Removing from adapter list.",
+                            null,
+                        )
                         currentWidgets = currentWidgets.toMutableList().apply {
                             remove(data)
                             host.deleteAppWidgetId(data.id)
@@ -567,9 +580,40 @@ abstract class BaseAdapter(
                 }
             } else {
                 binding.widgetReconfigure.isVisible = true
-                with(context) { binding.widgetPreview.setImageBitmap(data.iconBitmap) }
+                binding.widgetPreview.setImageBitmap(data.getIconBitmap(context))
                 binding.widgetLabel.text = data.label
             }
+        }
+
+        private fun bindLauncherItem(data: WidgetData) {
+            binding.widgetReconfigure.isVisible = false
+            binding.widgetHolder.isVisible = true
+            binding.openWidgetConfig.isVisible = false
+            binding.overrideIcon.isVisible = true
+
+            binding.overrideIcon.setOnClickListener {
+                launchShortcutIconOverride(data.id)
+            }
+
+            val shortcutView = FrameShortcutViewBinding.inflate(baseLayoutInflater)
+            val icon = data.getIconBitmap(context)
+
+            shortcutView.shortcutName.isVisible = false
+            shortcutView.shortcutRoot.setOnClickListener {
+                val launchIntent = Intent(Intent.ACTION_MAIN)
+                launchIntent.addCategory(Intent.CATEGORY_LAUNCHER)
+                launchIntent.`package` = data.widgetProviderComponent?.packageName
+                launchIntent.component = data.widgetProviderComponent
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+                DismissOrUnlockActivity.launch(
+                    context = context,
+                    activityIntent = launchIntent,
+                )
+            }
+            shortcutView.shortcutIcon.setImageBitmap(icon)
+
+            binding.widgetHolder.addView(shortcutView.root)
         }
 
         @SuppressLint("DiscouragedApi")
@@ -577,9 +621,14 @@ abstract class BaseAdapter(
             binding.widgetReconfigure.isVisible = false
             binding.widgetHolder.isVisible = true
             binding.openWidgetConfig.isVisible = false
+            binding.overrideIcon.isVisible = true
+
+            binding.overrideIcon.setOnClickListener {
+                launchShortcutIconOverride(data.id)
+            }
 
             val shortcutView = FrameShortcutViewBinding.inflate(baseLayoutInflater)
-            val icon = with(context) { data.iconBitmap }
+            val icon = data.getIconBitmap(context)
 
             shortcutView.shortcutRoot.setOnClickListener {
                 data.shortcutIntent?.apply {
@@ -625,6 +674,8 @@ abstract class BaseAdapter(
             direction: Int,
             vertical: Boolean
         ) {
+            context.logUtils.debugLog("handleResize($overThreshold, $step, $amount, $direction, $vertical)", null)
+
             val currentData = currentData ?: return
             val sizeInfo = currentData.safeSize
 
@@ -647,6 +698,8 @@ abstract class BaseAdapter(
             } else {
                 sizeInfo
             }
+
+            context.logUtils.debugLog("New size $newSizeInfo, old size $sizeInfo")
 
             val newData = currentData.copy(size = newSizeInfo)
 
@@ -679,58 +732,62 @@ abstract class BaseAdapter(
         fun onBind() {
             binding.root.setParentCompositionContext(rootView.createLifecycleAwareWindowRecomposer())
             binding.root.setContent {
-                AppTheme {
-                    Card(
-                        modifier = Modifier.fillMaxSize(),
-                        colors = CardColors(
-                            containerColor = Color.Transparent,
-                            contentColor = Color.White,
-                            disabledContentColor = Color.White,
-                            disabledContainerColor = Color.Transparent,
-                        ),
-                        shape = RoundedCornerShape(widgetCornerRadius.dp),
-                    ) {
-                        Box(
-                            modifier = Modifier.fillMaxSize()
-                                .clickable(
-                                    enabled = true,
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    onClick = { launchAddActivity() },
-                                    indication = ripple(
-                                        color = Color.Black,
-                                    ),
-                                ),
-                            contentAlignment = Alignment.Center,
+                MeasuredComposable(name = "AddWidgetLayout") {
+                    AppTheme {
+                        Card(
+                            modifier = Modifier.fillMaxSize(),
+                            colors = CardColors(
+                                containerColor = Color.Transparent,
+                                contentColor = Color.White,
+                                disabledContentColor = Color.White,
+                                disabledContainerColor = Color.Transparent,
+                            ),
+                            shape = RoundedCornerShape(widgetCornerRadius.dp),
                         ) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally,
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clickable(
+                                        enabled = true,
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        onClick = { launchAddActivity() },
+                                        indication = ripple(
+                                            color = Color.Black,
+                                        ),
+                                    ),
+                                contentAlignment = Alignment.Center,
                             ) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_baseline_add_24),
-                                    contentDescription = stringResource(R.string.add_widget),
-                                    tint = Color.White,
-                                    modifier = Modifier.size(48.dp)
-                                        .background(
-                                            brush = Brush.radialGradient(
-                                                0f to Color.Black.copy(alpha = 0.5f),
-                                                1f to Color.Transparent,
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                ) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_baseline_add_24),
+                                        contentDescription = stringResource(R.string.add_widget),
+                                        tint = Color.White,
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .background(
+                                                brush = Brush.radialGradient(
+                                                    0f to Color.Black.copy(alpha = 0.5f),
+                                                    1f to Color.Transparent,
+                                                ),
+                                            ),
+                                    )
+
+                                    Text(
+                                        text = stringResource(R.string.add_widget),
+                                        fontWeight = FontWeight.Bold,
+                                        style = LocalTextStyle.current.copy(
+                                            shadow = Shadow(
+                                                color = Color.Black,
+                                                offset = Offset(3f, 3f),
+                                                blurRadius = 5f,
                                             ),
                                         ),
-                                )
-
-                                Text(
-                                    text = stringResource(R.string.add_widget),
-                                    fontWeight = FontWeight.Bold,
-                                    style = LocalTextStyle.current.copy(
-                                        shadow = Shadow(
-                                            color = Color.Black,
-                                            offset = Offset(3f, 3f),
-                                            blurRadius = 5f,
-                                        ),
-                                    ),
-                                    fontSize = 20.sp,
-                                )
+                                        fontSize = 20.sp,
+                                    )
+                                }
                             }
                         }
                     }

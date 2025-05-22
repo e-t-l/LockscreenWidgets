@@ -1,11 +1,14 @@
 package tk.zwander.lockscreenwidgets.views
 
 import android.annotation.SuppressLint
+import android.content.ComponentCallbacks2
 import android.content.Context
+import android.graphics.Canvas
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener2
 import android.hardware.SensorManager
+import android.os.Build
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
@@ -17,9 +20,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.view.isVisible
+import com.bugsnag.android.performance.compose.MeasuredComposable
 import com.joaomgcd.taskerpluginlibrary.extensions.requestQuery
 import kotlinx.coroutines.flow.MutableStateFlow
 import tk.zwander.common.util.Event
+import tk.zwander.common.util.EventObserver
 import tk.zwander.common.util.HandlerRegistry
 import tk.zwander.common.util.PrefManager
 import tk.zwander.common.util.eventManager
@@ -37,6 +42,7 @@ import tk.zwander.common.util.vibrate
 import tk.zwander.lockscreenwidgets.activities.TaskerIsShowingFrame
 import tk.zwander.lockscreenwidgets.compose.IDListLayout
 import tk.zwander.lockscreenwidgets.databinding.WidgetFrameBinding
+import tk.zwander.lockscreenwidgets.util.FrameSpecificPreferences
 import kotlin.math.roundToInt
 
 /**
@@ -46,8 +52,9 @@ import kotlin.math.roundToInt
  * the logic relating to moving, resizing, etc, is handled by the Accessibility service,
  * this View listens for and notifies of the relevant events.
  */
-class WidgetFrameView(context: Context, attrs: AttributeSet) : ConstraintLayout(context, attrs) {
+class WidgetFrameView(context: Context, attrs: AttributeSet) : ConstraintLayout(context, attrs), EventObserver {
     var animationState = AnimationState.STATE_IDLE
+    private var frameId: Int = Int.MIN_VALUE
 
     private var maxPointerCount = 0
     private var alreadyIndicatedMoving = false
@@ -62,6 +69,7 @@ class WidgetFrameView(context: Context, attrs: AttributeSet) : ConstraintLayout(
         set(value) {
             field = value
             binding.editWrapper.isVisible = value
+            binding.removeFrame.isVisible = value && frameId != -1
         }
 
     private val sensorManager by lazy { context.getSystemService(Context.SENSOR_SERVICE) as SensorManager }
@@ -97,10 +105,35 @@ class WidgetFrameView(context: Context, attrs: AttributeSet) : ConstraintLayout(
 
     private val debugIdItems = MutableStateFlow<Set<String>>(setOf())
 
+    private val framePreferences by lazy {
+        FrameSpecificPreferences(frameId = frameId, context = context)
+    }
+
     enum class AnimationState {
         STATE_ADDING,
         STATE_REMOVING,
         STATE_IDLE
+    }
+
+    fun onCreate(frameId: Int) {
+        this.frameId = frameId
+
+        if (frameId != -1) {
+            binding.removeFrame.setOnClickListener {
+                binding.removeFrameConfirmation.root.show(frameId)
+            }
+        }
+
+        if (context.prefManager.firstViewing && frameId == -1) {
+            binding.gestureHintView.root.isVisible = true
+        }
+
+        updateFrameBackground()
+        context.eventManager.addObserver(this)
+    }
+
+    fun onDestroy() {
+        context.eventManager.removeObserver(this)
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -113,51 +146,48 @@ class WidgetFrameView(context: Context, attrs: AttributeSet) : ConstraintLayout(
 
         binding.move.setOnTouchListener(MoveTouchListener())
         binding.centerHorizontally.setOnClickListener {
-            context.eventManager.sendEvent(Event.CenterFrameHorizontally)
+            context.eventManager.sendEvent(Event.CenterFrameHorizontally(frameId))
         }
         binding.centerVertically.setOnClickListener {
-            context.eventManager.sendEvent(Event.CenterFrameVertically)
+            context.eventManager.sendEvent(Event.CenterFrameVertically(frameId))
         }
 
         binding.leftDragger.setOnTouchListener(ExpandTouchListener { velX, _, isUp ->
-            context.eventManager.sendEvent(Event.FrameResized(Event.FrameResized.Side.LEFT, velX, isUp))
+            context.eventManager.sendEvent(Event.FrameResized(frameId, Event.FrameResized.Side.LEFT, velX, isUp))
             true
         })
         binding.rightDragger.setOnTouchListener(ExpandTouchListener { velX, _, isUp ->
-            context.eventManager.sendEvent(Event.FrameResized(Event.FrameResized.Side.RIGHT, velX, isUp))
+            context.eventManager.sendEvent(Event.FrameResized(frameId, Event.FrameResized.Side.RIGHT, velX, isUp))
             true
         })
         binding.topDragger.setOnTouchListener(ExpandTouchListener { _, velY, isUp ->
-            context.eventManager.sendEvent(Event.FrameResized(Event.FrameResized.Side.TOP, velY, isUp))
+            context.eventManager.sendEvent(Event.FrameResized(frameId, Event.FrameResized.Side.TOP, velY, isUp))
             true
         })
         binding.bottomDragger.setOnTouchListener(ExpandTouchListener { _, velY, isUp ->
-            context.eventManager.sendEvent(Event.FrameResized(Event.FrameResized.Side.BOTTOM, velY, isUp))
+            context.eventManager.sendEvent(Event.FrameResized(frameId, Event.FrameResized.Side.BOTTOM, velY, isUp))
             true
         })
         binding.addWidget.setOnClickListener {
-            context.eventManager.sendEvent(Event.LaunchAddWidget)
+            context.eventManager.sendEvent(Event.LaunchAddWidget(frameId))
         }
         binding.tempHideFrame.setOnClickListener {
-            context.eventManager.sendEvent(Event.TempHide)
-        }
-
-        if (context.prefManager.firstViewing) {
-            binding.gestureHintView.root.isVisible = true
+            context.eventManager.sendEvent(Event.TempHide(frameId))
         }
 
         binding.idList.setContent {
-            val items by debugIdItems.collectAsState()
+            MeasuredComposable(name = "IDList") {
+                val items by debugIdItems.collectAsState()
 
-            IDListLayout(
-                items = items,
-                modifier = Modifier.fillMaxSize(),
-            )
+                IDListLayout(
+                    items = items,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
 
         updateDebugIdViewVisibility()
         updatePageIndicatorBehavior()
-        updateFrameBackground()
     }
 
     override fun onAttachedToWindow() {
@@ -171,7 +201,7 @@ class WidgetFrameView(context: Context, attrs: AttributeSet) : ConstraintLayout(
         }
 
         binding.frameCard.fadeAndScaleIn {
-            context.eventManager.sendEvent(Event.FrameAttachmentState(true))
+            context.eventManager.sendEvent(Event.FrameAttachmentState(frameId, true))
             animationState = AnimationState.STATE_IDLE
         }
     }
@@ -185,8 +215,25 @@ class WidgetFrameView(context: Context, attrs: AttributeSet) : ConstraintLayout(
         unregisterProxListener()
 
         isInEditingMode = false
-        context.eventManager.sendEvent(Event.FrameAttachmentState(false))
+        context.eventManager.sendEvent(Event.FrameAttachmentState(frameId, false))
         animationState = AnimationState.STATE_IDLE
+    }
+
+    override fun onEvent(event: Event) {
+        when (event) {
+            is Event.TrimMemory -> {
+                @Suppress("DEPRECATION")
+                if (event.level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    try {
+                        context.logUtils.debugLog("Attempting to destroy surface because of memory pressure.", null)
+                        viewRootImpl?.mSurface?.destroy()
+                    } catch (e: Throwable) {
+                        context.logUtils.debugLog("Unable to destroy surface.", e)
+                    }
+                }
+            }
+            else -> {}
+        }
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
@@ -215,15 +262,17 @@ class WidgetFrameView(context: Context, attrs: AttributeSet) : ConstraintLayout(
                     when (max) {
                         2 -> {
                             if (!context.prefManager.lockWidgetFrame) {
-                                isInEditingMode = !isInEditingMode
-                                if (binding.gestureHintView.root.isVisible) {
-                                    val ghv = binding.gestureHintView.root
-                                    if (!ghv.stage2) {
-                                        ghv.stage2 = true
-                                    } else if (ghv.stage2) {
-                                        ghv.stage2 = false
-                                        ghv.close()
-                                        binding.hideHintView.root.isVisible = true
+                                if (!binding.selectFrameLayout.isVisible) {
+                                    isInEditingMode = !isInEditingMode
+                                    if (binding.gestureHintView.root.isVisible) {
+                                        val ghv = binding.gestureHintView.root
+                                        if (!ghv.stage2) {
+                                            ghv.stage2 = true
+                                        } else if (ghv.stage2) {
+                                            ghv.stage2 = false
+                                            ghv.close()
+                                            binding.hideHintView.root.isVisible = true
+                                        }
                                     }
                                 }
                                 return true
@@ -233,19 +282,21 @@ class WidgetFrameView(context: Context, attrs: AttributeSet) : ConstraintLayout(
                             if (binding.hideHintView.root.isVisible) {
                                 binding.hideHintView.root.close()
                             }
-                            context.eventManager.sendEvent(Event.TempHide)
+                            context.eventManager.sendEvent(Event.TempHide(frameId))
                             return true
                         }
                     }
 
                     if (ev.buttonState == MotionEvent.BUTTON_SECONDARY
                         || ev.buttonState == MotionEvent.BUTTON_STYLUS_SECONDARY) {
-                        isInEditingMode = !isInEditingMode
+                        if (!binding.selectFrameLayout.isVisible) {
+                            isInEditingMode = !isInEditingMode
+                        }
                         return true
                     }
 
                     if (ev.buttonState == MotionEvent.BUTTON_TERTIARY) {
-                        context.eventManager.sendEvent(Event.TempHide)
+                        context.eventManager.sendEvent(Event.TempHide(frameId))
                         return true
                     }
                 }
@@ -259,8 +310,28 @@ class WidgetFrameView(context: Context, attrs: AttributeSet) : ConstraintLayout(
         return (maxPointerCount > 1 || isProxTooClose)
     }
 
+    override fun dispatchDraw(canvas: Canvas) {
+        context.logUtils.debugLog("dispatchDraw() WidgetFrameView $frameId", null)
+        super.dispatchDraw(canvas)
+    }
+
+    override fun draw(canvas: Canvas) {
+        context.logUtils.debugLog("draw() WidgetFrameView $frameId", null)
+        super.draw(canvas)
+    }
+
+    override fun drawChild(canvas: Canvas, child: View?, drawingTime: Long): Boolean {
+        context.logUtils.debugLog("drawChild() WidgetFrameView $frameId", null)
+        return super.drawChild(canvas, child, drawingTime)
+    }
+
+    override fun canHaveDisplayList(): Boolean {
+        context.logUtils.debugLog("canHaveDisplayList() ${this::class.java.name}")
+        return super.canHaveDisplayList()
+    }
+
     fun updateFrameBackground() {
-        binding.frameCard.setCardBackgroundColor(context.prefManager.backgroundColor)
+        binding.frameCard.setCardBackgroundColor(framePreferences.backgroundColor)
     }
 
     fun updatePageIndicatorBehavior() {
@@ -289,15 +360,15 @@ class WidgetFrameView(context: Context, attrs: AttributeSet) : ConstraintLayout(
     }
 
     fun updateDebugIdViewVisibility() {
-        binding.idList.isVisible = context.prefManager.showDebugIdView
+        binding.idList.isVisible = context.prefManager.showDebugIdView && frameId == -1
     }
 
     fun addWindow(wm: WindowManager, params: WindowManager.LayoutParams) {
         mainHandler.post {
-            context.logUtils.debugLog("Trying to add overlay $animationState")
+            context.logUtils.debugLog("Trying to add overlay $animationState", null)
 
             if (!isAttachedToWindow && animationState != AnimationState.STATE_ADDING) {
-                context.logUtils.debugLog("Adding overlay")
+                context.logUtils.debugLog("Adding overlay", null)
 
                 animationState = AnimationState.STATE_ADDING
 
@@ -318,25 +389,27 @@ class WidgetFrameView(context: Context, attrs: AttributeSet) : ConstraintLayout(
 
     fun removeWindow(wm: WindowManager) {
         mainHandler.post {
-            context.logUtils.debugLog("Trying to remove overlay $animationState")
+            context.logUtils.debugLog("Trying to remove overlay $animationState", null)
 
             if (isAttachedToWindow && animationState != AnimationState.STATE_REMOVING) {
                 animationState = AnimationState.STATE_REMOVING
 
-                context.logUtils.debugLog("Pre-animation removal")
+                context.logUtils.debugLog("Pre-animation removal", null)
 
                 binding.frameCard.fadeAndScaleOut {
-                    context.logUtils.debugLog("Post-animation removal")
+                    context.logUtils.debugLog("Post-animation removal", null)
 
                     postDelayed({
-                        context.logUtils.debugLog("Posted removal")
+                        context.logUtils.debugLog("Posted removal", null)
 
-                        wm.safeRemoveView(this)
+                        if (isAttachedToWindow) {
+                            wm.safeRemoveView(this)
+                        }
                         animationState = AnimationState.STATE_IDLE
                     }, 50)
                 }
             } else if (!isAttachedToWindow) {
-                wm.safeRemoveView(this)
+                wm.safeRemoveView(this, false)
 
                 animationState = AnimationState.STATE_IDLE
             }
@@ -360,19 +433,16 @@ class WidgetFrameView(context: Context, attrs: AttributeSet) : ConstraintLayout(
         isProxTooClose = false
     }
 
-    private fun onTouch(event: MotionEvent): Boolean {
-        return when (event.action) {
+    private fun onTouch(event: MotionEvent) {
+        when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                context.eventManager.sendEvent(Event.FrameIntercept(true))
-                false
+                context.eventManager.sendEvent(Event.FrameIntercept(frameId, true))
             }
             MotionEvent.ACTION_CANCEL,
             MotionEvent.ACTION_UP -> {
-                context.eventManager.sendEvent(Event.FrameIntercept(false))
+                context.eventManager.sendEvent(Event.FrameIntercept(frameId, false))
                 alreadyIndicatedMoving = false
-                false
             }
-            else -> false
         }
     }
 
@@ -399,12 +469,12 @@ class WidgetFrameView(context: Context, attrs: AttributeSet) : ConstraintLayout(
 
                     val velX = try {
                         (newX - prevExpandX).roundToInt()
-                    } catch (e: IllegalArgumentException) {
+                    } catch (_: IllegalArgumentException) {
                         0
                     }
                     val velY = try {
                         (newY - prevExpandY).roundToInt()
-                    } catch (e: IllegalArgumentException) {
+                    } catch (_: IllegalArgumentException) {
                         0
                     }
 
@@ -417,7 +487,7 @@ class WidgetFrameView(context: Context, attrs: AttributeSet) : ConstraintLayout(
                     //If the velocity is odd, the frame may over-compensate, causing it
                     //to push the opposite side the opposite direction by a pixel every time
                     //this is invoked.
-                    listener?.invoke(velX.makeEven(), velY.makeEven(), false) ?: false
+                    listener?.invoke(velX.makeEven(), velY.makeEven(), false) == true
                 }
                 MotionEvent.ACTION_UP -> {
                     listener?.invoke(0, 0, true)
@@ -455,11 +525,11 @@ class WidgetFrameView(context: Context, attrs: AttributeSet) : ConstraintLayout(
                     prevX = newX
                     prevY = newY
 
-                    context.eventManager.sendEvent(Event.FrameMoved(velX, velY))
+                    context.eventManager.sendEvent(Event.FrameMoved(frameId, velX, velY))
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    context.eventManager.sendEvent(Event.FrameMoveFinished)
+                    context.eventManager.sendEvent(Event.FrameMoveFinished(frameId))
                     true
                 }
                 else -> false

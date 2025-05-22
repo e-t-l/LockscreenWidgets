@@ -2,87 +2,35 @@ package tk.zwander.lockscreenwidgets.services
 
 import android.accessibilityservice.AccessibilityService
 import android.annotation.SuppressLint
-import android.content.ComponentName
-import android.content.Context
-import android.content.Intent
-import android.os.Build
 import android.os.PowerManager
-import android.provider.Settings
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.view.inputmethod.InputMethodManager
+import com.bugsnag.android.Bugsnag
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import tk.zwander.common.util.AccessibilityUtils.runAccessibilityJob
+import tk.zwander.common.util.AccessibilityUtils.runWindowOperation
 import tk.zwander.common.util.Event
 import tk.zwander.common.util.EventObserver
 import tk.zwander.common.util.HandlerRegistry
 import tk.zwander.common.util.PrefManager
+import tk.zwander.common.util.copyCompat
 import tk.zwander.common.util.eventManager
 import tk.zwander.common.util.handler
 import tk.zwander.common.util.keyguardManager
 import tk.zwander.common.util.logUtils
 import tk.zwander.common.util.prefManager
 import tk.zwander.lockscreenwidgets.appwidget.IDListProvider
-import tk.zwander.lockscreenwidgets.util.WidgetFrameDelegate
+import tk.zwander.lockscreenwidgets.util.FramePrefs
+import tk.zwander.lockscreenwidgets.util.MainWidgetFrameDelegate
+import tk.zwander.lockscreenwidgets.util.SecondaryWidgetFrameDelegate
 import tk.zwander.widgetdrawer.util.DrawerDelegate
-
-//Check if the Accessibility service is enabled
-val Context.isAccessibilityEnabled: Boolean
-    get() = Settings.Secure.getString(
-        contentResolver,
-        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-    )?.contains(ComponentName(this, Accessibility::class.java).flattenToString()) ?: false
-
-fun Context.openAccessibilitySettings() {
-    //Samsung devices have a separate Activity for listing
-    //installed Accessibility Services, for some reason.
-    //It's exported and permission-free, at least on Android 10,
-    //so attempt to launch it. A "dumb" try-catch is simpler
-    //than a check for the existence and state of this Activity.
-    //If the Installed Services Activity can't be launched,
-    //just launch the normal Accessibility Activity.
-    try {
-        val accIntent = Intent(Intent.ACTION_MAIN)
-        accIntent.`package` = "com.android.settings"
-        accIntent.component = ComponentName(
-            "com.android.settings",
-            "com.android.settings.Settings\$AccessibilityInstalledServiceActivity"
-        )
-        startActivity(accIntent)
-    } catch (e: Exception) {
-        logUtils.debugLog("Error opening Installed Services:", e)
-        val accIntent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-        startActivity(accIntent)
-    }
-}
-
-fun <T> AccessibilityNodeInfo?.use(block: (AccessibilityNodeInfo?) -> T): T {
-    val result = block(this)
-    @Suppress("DEPRECATION")
-    this?.recycle()
-    return result
-}
-
-fun AccessibilityEvent.copyCompat(): AccessibilityEvent {
-    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        AccessibilityEvent(this)
-    } else {
-        @Suppress("DEPRECATION")
-        AccessibilityEvent.obtain(this)
-    }
-}
-
-fun AccessibilityNodeInfo.hasVisibleIds(vararg ids: String): Boolean {
-    return ids.contains(viewIdResourceName) && isVisibleToUser
-}
-
-fun AccessibilityNodeInfo.hasVisibleIds(ids: Iterable<String>): Boolean {
-    return ids.contains(viewIdResourceName) && isVisibleToUser
-}
 
 /**
  * This is where a lot of the magic happens.
@@ -97,13 +45,14 @@ fun AccessibilityNodeInfo.hasVisibleIds(ids: Iterable<String>): Boolean {
  */
 class Accessibility : AccessibilityService(), EventObserver, CoroutineScope by MainScope() {
     private val kgm by lazy { keyguardManager }
-    private val wm by lazy { getSystemService(Context.WINDOW_SERVICE) as WindowManager }
-    private val power by lazy { getSystemService(Context.POWER_SERVICE) as PowerManager }
-    private val imm by lazy { getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager }
-    private val frameDelegate: WidgetFrameDelegate
-        get() = WidgetFrameDelegate.getInstance(this)
+    private val wm by lazy { getSystemService(WINDOW_SERVICE) as WindowManager }
+    private val power by lazy { getSystemService(POWER_SERVICE) as PowerManager }
+    private val imm by lazy { getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager }
+    private val frameDelegate: MainWidgetFrameDelegate
+        get() = MainWidgetFrameDelegate.getInstance(this)
     private val drawerDelegate: DrawerDelegate
         get() = DrawerDelegate.getInstance(this)
+    private val secondaryFrameDelegates = hashMapOf<Int, SecondaryWidgetFrameDelegate>()
 
     private val sharedPreferencesChangeHandler = HandlerRegistry {
         handler(PrefManager.KEY_ACCESSIBILITY_EVENT_DELAY) {
@@ -115,6 +64,29 @@ class Accessibility : AccessibilityService(), EventObserver, CoroutineScope by M
         handler(PrefManager.KEY_DEBUG_LOG) {
             IDListProvider.sendUpdate(this@Accessibility)
         }
+        handler(PrefManager.KEY_CURRENT_FRAMES) {
+            val newFrameIds = prefManager.currentSecondaryFrames
+            val currentFrames = secondaryFrameDelegates
+
+            val removedFrames = currentFrames.filter { (id, _) -> !newFrameIds.contains(id) }
+            val addedFrameIds = newFrameIds.filter { !currentFrames.containsKey(it) }
+
+            removedFrames.forEach { (id, frame) ->
+                frame.onDestroy()
+                FramePrefs.removeFrame(this@Accessibility, id)
+                currentFrames.remove(id)
+            }
+
+            addedFrameIds.forEach { id ->
+                val newFrame = SecondaryWidgetFrameDelegate(this@Accessibility, id)
+                newFrame.onCreate()
+                currentFrames.values.firstOrNull()?.let { referenceFrame ->
+                    newFrame.updateState { referenceFrame.state }
+                    newFrame.updateCommonState { referenceFrame.commonState }
+                }
+                currentFrames[id] = newFrame
+            }
+        }
     }
 
     private var state = State()
@@ -125,6 +97,7 @@ class Accessibility : AccessibilityService(), EventObserver, CoroutineScope by M
 
         sharedPreferencesChangeHandler.register(this)
         eventManager.addObserver(this)
+        Bugsnag.leaveBreadcrumb("Accessibility service created.")
     }
 
     override fun onServiceConnected() {
@@ -134,7 +107,27 @@ class Accessibility : AccessibilityService(), EventObserver, CoroutineScope by M
 
         frameDelegate.onCreate()
         drawerDelegate.onCreate()
+
+        prefManager.currentSecondaryFrames.forEach { secondaryId ->
+            secondaryFrameDelegates[secondaryId] = SecondaryWidgetFrameDelegate(this, secondaryId).also {
+                it.onCreate()
+            }
+        }
+
         eventManager.sendEvent(Event.RequestNotificationCount)
+        Bugsnag.leaveBreadcrumb("Accessibility service connected.")
+
+        launch(Dispatchers.Main) {
+            runWindowOperation(
+                frameDelegates = secondaryFrameDelegates + (-1 to frameDelegate),
+                drawerDelegate = drawerDelegate,
+                isScreenOn = power.isInteractive,
+                isOnKeyguard = kgm.isKeyguardLocked,
+                getWindows = ::getWindowsSafely,
+                initialRun = true,
+                wm = wm,
+            )
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -149,28 +142,21 @@ class Accessibility : AccessibilityService(), EventObserver, CoroutineScope by M
                 accessibilityJob = runAccessibilityJob(
                     context = this@Accessibility,
                     event = eventCopy,
-                    frameDelegate = frameDelegate,
+                    frameDelegates = secondaryFrameDelegates + (-1 to frameDelegate),
                     drawerDelegate = drawerDelegate,
                     power = power,
                     kgm = kgm,
                     wm = wm,
                     imm = imm,
-                    getWindows = {
-                        try {
-                            ArrayList(windows)
-                        } catch (e: SecurityException) {
-                            // Sometimes throws a SecurityException talking about mismatching
-                            // user IDs. In that case, return null and don't update any window-based
-                            // state items.
-                            null
-                        }
-                    }
+                    getWindows = ::getWindowsSafely,
                 ),
             )
         }
     }
 
-    override fun onInterrupt() {}
+    override fun onInterrupt() {
+        Bugsnag.leaveBreadcrumb("Accessibility service interrupted.")
+    }
 
     override fun onEvent(event: Event) {
         when (event) {
@@ -189,14 +175,30 @@ class Accessibility : AccessibilityService(), EventObserver, CoroutineScope by M
         sharedPreferencesChangeHandler.unregister(this)
         frameDelegate.onDestroy()
         drawerDelegate.onDestroy()
+        secondaryFrameDelegates.forEach { (_, delegate) ->
+            delegate.onDestroy()
+        }
 
         eventManager.removeObserver(this)
+
+        Bugsnag.leaveBreadcrumb("Accessibility service destroyed.")
     }
 
     private fun updateState(transform: (State) -> State) {
         val newState = transform(state)
         logUtils.debugLog("Updating accessibility state from $state to $newState")
         state = newState
+    }
+
+    private fun getWindowsSafely(): List<AccessibilityWindowInfo>? {
+        return try {
+            ArrayList(windows)
+        } catch (_: SecurityException) {
+            // Sometimes throws a SecurityException talking about mismatching
+            // user IDs. In that case, return null and don't update any window-based
+            // state items.
+            null
+        }
     }
 
     private data class State(

@@ -1,7 +1,12 @@
+@file:Suppress("unused")
+
 package tk.zwander.common.util
 
 import android.annotation.SuppressLint
 import android.content.Context
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import tk.zwander.common.data.WidgetData
@@ -66,13 +71,8 @@ class EventManager private constructor(private val context: Context) {
         observers.add(observer)
     }
 
-    inline fun <reified T : Event> removeListener(noinline listener: (T) -> Unit) {
-        removeListener(
-            ListenerInfo(
-                T::class.java,
-                listener
-            )
-        )
+    fun <T : Event> removeListener(listener: (T) -> Unit) {
+        listeners.removeAll { it.listener == listener }
     }
 
     fun <T : Event> removeListener(listenerInfo: ListenerInfo<T>) {
@@ -85,7 +85,7 @@ class EventManager private constructor(private val context: Context) {
     }
 
     fun sendEvent(event: Event) {
-        context.logUtils.debugLog("Sending event $event")
+        context.logUtils.debugLog("Sending event $event", null)
 
         observers.forEach {
             it.onEvent(event)
@@ -100,16 +100,10 @@ class EventManager private constructor(private val context: Context) {
 
 sealed class Event {
     data object LockscreenDismissed : Event()
-    data object TempHide : Event()
-    data object LaunchAddWidget : Event()
-    data object FrameMoveFinished : Event()
     data object ScreenOff : Event()
     data object ScreenOn : Event()
     data object NightModeUpdate : Event()
-    data object CenterFrameHorizontally : Event()
-    data object CenterFrameVertically : Event()
     data object RequestNotificationCount : Event()
-    data object FrameResizeFinished : Event()
 
     /**
      * On Android 8.0+, it's pretty easy to dismiss the lock screen with a simple API call.
@@ -117,10 +111,10 @@ sealed class Event {
      * lock screen has successfully been dismissed.
      */
     data class NewNotificationCount(val count: Int) : Event()
-    data class FrameIntercept(val down: Boolean) : Event()
-    data class FrameAttachmentState(val attached: Boolean) : Event()
-    data class FrameMoved(val velX: Float, val velY: Float) : Event()
-    data class FrameResized(val which: Side, val velocity: Int, val isUp: Boolean) : Event() {
+    data class FrameIntercept(val frameId: Int, val down: Boolean) : Event()
+    data class FrameAttachmentState(val frameId: Int, val attached: Boolean) : Event()
+    data class FrameMoved(val frameId: Int, val velX: Float, val velY: Float) : Event()
+    data class FrameResized(val frameId: Int, val which: Side, val velocity: Int, val isUp: Boolean) : Event() {
         enum class Side {
             LEFT,
             TOP,
@@ -130,7 +124,24 @@ sealed class Event {
     }
     data class RemoveWidgetConfirmed(val remove: Boolean, val item: WidgetData?) : Event()
     data class DebugIdsUpdated(val ids: Collection<String>) : Event()
-    data class EditingIndexUpdated(val index: Int) : Event()
+    data class EditingIndexUpdated(val index: Int, val frameId: Int) : Event()
+    data class FrameMoveFinished(val frameId: Int) : Event()
+    data class CenterFrameHorizontally(val frameId: Int) : Event()
+    data class CenterFrameVertically(val frameId: Int) : Event()
+    data class FrameResizeFinished(val frameId: Int) : Event()
+    data class LaunchAddWidget(val frameId: Int) : Event()
+    data class TempHide(val frameId: Int) : Event()
+    data class RemoveFrameConfirmed(val confirmed: Boolean, val frameId: Int?) : Event()
+    data class PreviewFrames(val show: ShowMode, val requestCode: Int = -1, val includeMainFrame: Boolean = true) : Event() {
+        enum class ShowMode {
+            SHOW,
+            HIDE,
+            TOGGLE,
+            SHOW_FOR_SELECTION,
+        }
+    }
+    data class FrameSelected(val frameId: Int?, val requestCode: Int?) : Event()
+    data class TrimMemory(val level: Int) : Event()
 
     //*** Widget Drawer
     data object CloseDrawer : Event()
@@ -159,3 +170,16 @@ data class ListenerInfo<T : Event>(
     val listenerClass: Class<T>,
     val listener: (T) -> Unit
 )
+
+@Composable
+fun EventObserverEffect(observer: EventObserver?) {
+    val context = LocalContext.current
+
+    DisposableEffect(observer) {
+        observer?.let { context.eventManager.addObserver(observer) }
+
+        onDispose {
+            observer?.let { context.eventManager.removeObserver(observer) }
+        }
+    }
+}

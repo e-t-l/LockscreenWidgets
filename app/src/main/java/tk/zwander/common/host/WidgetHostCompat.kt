@@ -20,6 +20,7 @@ import net.bytebuddy.android.AndroidClassLoadingStrategy
 import net.bytebuddy.implementation.MethodDelegation
 import tk.zwander.common.util.logUtils
 import tk.zwander.common.views.ZeroPaddingAppWidgetHostView
+import tk.zwander.lockscreenwidgets.util.IconPrefs
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
@@ -48,14 +49,14 @@ class WidgetHostCompat(
         @SuppressLint("PrivateApi")
         private val ON_CLICK_HANDLER_CLASS = try {
             Class.forName("android.widget.RemoteViews\$OnClickHandler")
-        } catch (e: ClassNotFoundException) {
+        } catch (_: ClassNotFoundException) {
             null
         }
 
         @SuppressLint("PrivateApi")
         private val INTERACTION_HANDLER_CLASS = try {
             Class.forName("android.widget.RemoteViews\$InteractionHandler")
-        } catch (e: ClassNotFoundException) {
+        } catch (_: ClassNotFoundException) {
             null
         }
 
@@ -159,6 +160,12 @@ class WidgetHostCompat(
         if (listeners.isEmpty()) {
             super.stopListening()
         }
+    }
+
+    override fun deleteAppWidgetId(appWidgetId: Int) {
+        super.deleteAppWidgetId(appWidgetId)
+
+        IconPrefs.removeIcon(context, appWidgetId)
     }
 
     @SuppressLint("PrivateApi")

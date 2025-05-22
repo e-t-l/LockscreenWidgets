@@ -1,13 +1,13 @@
 package tk.zwander.lockscreenwidgets
 
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.content.ComponentName
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import com.bugsnag.android.performance.compose.MeasuredComposable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
@@ -16,16 +16,16 @@ import kotlinx.coroutines.launch
 import tk.zwander.common.activities.BaseActivity
 import tk.zwander.common.activities.OnboardingActivity
 import tk.zwander.common.compose.main.MainContent
-import tk.zwander.common.tiles.NCTile
 import tk.zwander.common.tiles.widget.WidgetTileFive
 import tk.zwander.common.tiles.widget.WidgetTileFour
 import tk.zwander.common.tiles.widget.WidgetTileOne
 import tk.zwander.common.tiles.widget.WidgetTileThree
 import tk.zwander.common.tiles.widget.WidgetTileTwo
+import tk.zwander.common.util.Event
+import tk.zwander.common.util.eventManager
+import tk.zwander.common.util.isAccessibilityEnabled
 import tk.zwander.common.util.isOneUI
 import tk.zwander.common.util.prefManager
-import tk.zwander.lockscreenwidgets.services.isAccessibilityEnabled
-import tk.zwander.lockscreenwidgets.util.WidgetFrameDelegate
 
 /**
  * Host the main page of the app (the social links). It also hosts the buttons to add a widget, view usage
@@ -37,7 +37,7 @@ import tk.zwander.lockscreenwidgets.util.WidgetFrameDelegate
 class MainActivity : BaseActivity(), CoroutineScope by MainScope() {
     private val introRequest =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode != Activity.RESULT_OK) {
+            if (result.resultCode != RESULT_OK) {
                 //The intro sequence or permissions request wasn't successful. Quit.
                 finish()
             } else {
@@ -56,7 +56,6 @@ class MainActivity : BaseActivity(), CoroutineScope by MainScope() {
             //We don't want the NC tile to show on non-One UI devices.
             launch(Dispatchers.IO) {
                 val components = arrayOf(
-                    NCTile::class.java,
                     WidgetTileOne::class.java,
                     WidgetTileTwo::class.java,
                     WidgetTileThree::class.java,
@@ -76,7 +75,9 @@ class MainActivity : BaseActivity(), CoroutineScope by MainScope() {
         }
 
         setContent {
-            MainContent()
+            MeasuredComposable(name = "MainContentLayout") {
+                MainContent()
+            }
         }
 
         if (prefManager.firstRun || (!isAccessibilityEnabled && !BuildConfig.DEBUG)) {
@@ -90,7 +91,7 @@ class MainActivity : BaseActivity(), CoroutineScope by MainScope() {
     override fun onStop() {
         super.onStop()
 
-        WidgetFrameDelegate.peekInstance(this)?.updateState { it.copy(isPreview = false) }
+        eventManager.sendEvent(Event.PreviewFrames(Event.PreviewFrames.ShowMode.HIDE))
     }
 
     override fun onDestroy() {

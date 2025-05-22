@@ -1,8 +1,8 @@
 package tk.zwander.common.util
 
+import android.annotation.SuppressLint
 import android.app.WallpaperManager
 import android.content.Context
-import android.content.ContextWrapper
 import android.hardware.display.DisplayManager
 import android.os.PowerManager
 import android.view.Surface
@@ -27,17 +27,19 @@ import tk.zwander.common.data.WidgetData
 import tk.zwander.common.data.WidgetType
 import tk.zwander.common.host.WidgetHostCompat
 import tk.zwander.common.host.widgetHostCompat
+import tk.zwander.common.util.mitigations.SafeContextWrapper
+import java.util.concurrent.ConcurrentLinkedDeque
 
 @Suppress("MemberVisibilityCanBePrivate")
-abstract class BaseDelegate<State : Any>(context: Context) : ContextWrapper(context),
+abstract class BaseDelegate<State : Any>(context: Context) : SafeContextWrapper(context),
     EventObserver, WidgetHostCompat.OnClickCallback, SavedStateRegistryOwner {
-    protected val wm by lazy { getSystemService(WINDOW_SERVICE) as WindowManager }
+    protected val wm by lazy { windowManager }
     protected val power by lazy { getSystemService(POWER_SERVICE) as PowerManager }
     protected val kgm by lazy { keyguardManager }
-    protected val wallpaper by lazy { getSystemService(Context.WALLPAPER_SERVICE) as WallpaperManager }
+    protected val wallpaper by lazy { getSystemService(WALLPAPER_SERVICE) as WallpaperManager }
     protected val widgetHost by lazy { widgetHostCompat }
     protected val displayManager by lazy {
-        getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        getSystemService(DISPLAY_SERVICE) as DisplayManager
     }
 
     open var commonState: BaseState = BaseState()
@@ -126,6 +128,7 @@ abstract class BaseDelegate<State : Any>(context: Context) : ContextWrapper(cont
         scope.cancel()
     }
 
+    @SuppressLint("NotifyDataSetChanged")
     @CallSuper
     override fun onEvent(event: Event) {
         when (event) {
@@ -133,27 +136,41 @@ abstract class BaseDelegate<State : Any>(context: Context) : ContextWrapper(cont
                 val position = currentWidgets.indexOf(event.item)
 
                 if (event.remove && currentWidgets.contains(event.item)) {
-                    currentWidgets = currentWidgets.toMutableList().apply {
+                    updateCommonState { it.copy(updatedForMoveOrRemove = true) }
+
+                    val newWidgets = currentWidgets.toMutableList().apply {
                         remove(event.item)
                         when (event.item?.safeType) {
                             WidgetType.WIDGET -> widgetHost.deleteAppWidgetId(event.item.id)
-                            WidgetType.SHORTCUT -> shortcutIdManager.removeShortcutId(event.item.id)
+                            WidgetType.SHORTCUT,
+                            WidgetType.LAUNCHER_SHORTCUT,
+                            WidgetType.LAUNCHER_ITEM -> shortcutIdManager.removeShortcutId(event.item.id)
+
                             else -> {}
                         }
                     }
 
                     adapter.currentEditingInterfacePosition = -1
-                    adapter.updateWidgets(currentWidgets.toList())
+                    adapter.updateWidgets(newWidgets)
+                    gridLayoutManager.doOnLayoutCompleted {
+                        if (!recyclerView.isComputingLayout) {
+                            adapter.notifyDataSetChanged()
+                        }
+                    }
+                    currentWidgets = newWidgets
                 }
 
                 widgetRemovalConfirmed(event, position)
             }
+
             Event.ScreenOff -> {
                 updateCommonState { it.copy(isScreenOn = false) }
             }
+
             Event.ScreenOn -> {
                 updateCommonState { it.copy(isScreenOn = true) }
             }
+
             else -> {}
         }
     }
@@ -164,22 +181,30 @@ abstract class BaseDelegate<State : Any>(context: Context) : ContextWrapper(cont
 
     open fun updateState(transform: (State) -> State) {
         val newState = transform(state)
-        logUtils.debugLog("Updating state from\n$state\nto\n$newState")
+
+        if (newState != state) {
+            logUtils.debugLog("Updating state from\n$state\nto\n$newState", null)
+        }
+
         state = newState
     }
 
     fun updateCommonState(transform: (BaseState) -> BaseState) {
         val newState = transform(commonState)
-        logUtils.debugLog("Updating common state from\n$commonState\nto\n$newState")
+
+        if (newState != commonState) {
+            logUtils.debugLog("Updating common state from\n$commonState\nto\n$newState", null)
+        }
+
         commonState = newState
     }
 
     @CallSuper
     protected open fun onWidgetMoved(moved: Boolean) {
         if (moved) {
+            updateCommonState { it.copy(updatedForMoveOrRemove = true) }
             currentWidgets = adapter.widgets
             adapter.currentEditingInterfacePosition = -1
-            updateCommonState { it.copy(updatedForMove = true) }
         }
     }
 
@@ -198,6 +223,7 @@ abstract class BaseDelegate<State : Any>(context: Context) : ContextWrapper(cont
     protected open fun onItemSelected(selected: Boolean, highlighted: Boolean) {
         updateCommonState { it.copy(isHoldingItem = selected, isItemHighlighted = highlighted) }
     }
+
     protected abstract fun isLocked(): Boolean
     protected abstract fun retrieveCounts(): Pair<Int?, Int?>
 
@@ -206,7 +232,7 @@ abstract class BaseDelegate<State : Any>(context: Context) : ContextWrapper(cont
     data class BaseState(
         val isHoldingItem: Boolean = false,
         val isItemHighlighted: Boolean = false,
-        val updatedForMove: Boolean = false,
+        val updatedForMoveOrRemove: Boolean = false,
         val handlingClick: Boolean = false,
         val wasOnKeyguard: Boolean = false,
         val isScreenOn: Boolean = false,
@@ -224,10 +250,12 @@ abstract class BaseDelegate<State : Any>(context: Context) : ContextWrapper(cont
         rowCount,
         colCount
     ) {
+        private val onLayoutCompletedCallbacks = ConcurrentLinkedDeque<() -> Unit>()
+
         override fun makeAndAddView(
             position: Int,
             direction: Direction,
-            recycler: RecyclerView.Recycler
+            recycler: RecyclerView.Recycler,
         ): View {
             return try {
                 super.makeAndAddView(position, direction, recycler)
@@ -235,6 +263,21 @@ abstract class BaseDelegate<State : Any>(context: Context) : ContextWrapper(cont
                 context.logUtils.normalLog("Error laying out widget view at $position.", e)
                 context.createWidgetErrorView()
             }
+        }
+
+        override fun onLayoutCompleted(state: RecyclerView.State?) {
+            super.onLayoutCompleted(state)
+
+            onLayoutCompletedCallbacks.removeAll {
+                mainHandler.post {
+                    it()
+                }
+                true
+            }
+        }
+
+        fun doOnLayoutCompleted(callback: () -> Unit) {
+            onLayoutCompletedCallbacks.add(callback)
         }
     }
 }

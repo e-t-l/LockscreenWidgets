@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="version_template">v%s</string>
     <string name="edit_gesture_hint">اضغط على التطبيق المصغر بإصبعين للتحريك وضبط الحجم.</string>
     <string name="edit_gesture_hint_2">حسناً! اضغط بإصبعين لإخفاء عناصر الواجهة.</string>
     <string name="hide_gesture_hint">اضغط على اطار التطبيق المصغر بثلاث اصابع لإخفائة مؤقتاً. سيبقى مخفياً حتى تطفئ وتشغل الشاشة مجددا.</string>
-    <string name="hide_gesture_hint_2">اطفئ واعد تشغيل الشاشة مجددا لجلب التطبيق المصغر.</string>
     <string name="accessibility_service_desc">التطبيقات المصغرة لشاشة القفل تحتاح الى خدمة إمكانية الوصول للعرض على شاشة القفل ومركز الاشعارات. لن يتم جمع بيانات. ولا إجراء سيتم في الجهاز.</string>
     <string name="add_widget">اضافة تطبيق مصغر</string>
     <string name="grant">سماح</string>
+    <string name="granted">Granted</string>
     <string name="settings">الاعدادات</string>
     <string name="yes">نعم</string>
     <string name="no">لا</string>
@@ -29,6 +29,11 @@
     <string name="battery_whitelist">قائمة السماح للبطارية</string>
     <string name="back">رجوع</string>
     <string name="clear">مسح</string>
+    <string name="launcher">Launcher</string>
+    <string name="reset">Reset</string>
+    <string name="increase">Increase</string>
+    <string name="decrease">Decrease</string>
+    <string name="selected" tools:override="true">Selected</string>
     <string name="drawer_enabled">الدرج مفعل</string>
     <string name="frame_enabled">الاطار مفعل</string>
     <string name="add_id_hint">com.android.systemui:id/some_id_here</string>
@@ -50,13 +55,13 @@
     <string name="hide">إخفاء</string>
     <string name="shortcut_icon">إختصار الايقونة</string>
     <string name="expand">تمديد</string>
-    <string name="alert_remove_widget_confirm">Remove Widget?</string>
-    <string name="alert_remove_widget_confirm_desc">Are you sure you want to remove this widget?</string>
+    <string name="alert_remove_widget_confirm">حذف التطبيق المصغر؟</string>
+    <string name="alert_remove_widget_confirm_desc">Are you sure you want to remove this item?</string>
     <string name="main_screen_social_mastodon">Mastodon</string>
     <string name="main_screen_social_mastodon_desc">Follow me on Mastodon for updates about my apps and random development-related nonsense.</string>
-    <string name="main_screen_social_website">Website</string>
-    <string name="main_screen_social_website_desc">Check out my website if you\'re that bored.</string>
-    <string name="main_screen_social_email">Email</string>
+    <string name="main_screen_social_website">الموقع الالكتروني</string>
+    <string name="main_screen_social_website_desc">تحقق من موقع الويب الخاص بي إذا كنت تشعر بالملل.</string>
+    <string name="main_screen_social_email">البريد الإلكتروني</string>
     <string name="main_screen_social_email_desc">Send me an email if you have a question or problem. Please include as much detail as possible. Just telling me \"it doesn\'t work\" just wastes everyone\'s time.</string>
     <string name="main_screen_social_telegram">Telegram</string>
     <string name="main_screen_social_telegram_desc">If email isn\'t your thing, you can ask your question in my Telegram server. Please mention which app you\'re using, as this server is for all of the ones I\'ve developed.</string>
@@ -96,7 +101,7 @@
     <string name="settings_screen_present_ids">Hide on Present IDs</string>
     <string name="settings_screen_present_ids_desc">Lockscreen Widgets will hide itself when these IDs are on-screen. You can find which IDs should go here by enabling both Debug switches and looking at the IDs that are highlighted in green when you want the frame to be hidden.</string>
     <string name="settings_screen_show_in_notification_center">Show when Notification Shade is Fully Expanded</string>
-    <string name="settings_screen_show_in_notification_center_desc">Samsung\'s One UI 1 (Pie) and One UI 2 (10) have some empty space to the right of the clock when the notification center is fully expanded. Enabling this option will cause the widget frame to appear when the shade is fully expanded. This state has its own independent positioning and size.</string>
+    <string name="settings_screen_show_in_notification_center_desc">Enabling this option will cause the widget frame to appear when the shade is fully expanded. This state has its own independent positioning and size.</string>
     <string name="settings_screen_show_on_main_lock_screen">Show on Main Lock Screen</string>
     <string name="settings_screen_show_on_main_lock_screen_desc">اذا كنت تستخدم خيار الاظهار في مركز الاشعارات ،قد لا تريد التطبيق يظهر في شاشة القفل الرئيسية. عطل هذا الخيار ليكون الاطار ظاهر حينما يكون مركز الاشعارات ممد بالكامل.</string>
     <string name="settings_screen_corner_radius">زاوية نصف القطر</string>
@@ -113,8 +118,8 @@
     <string name="settings_screen_touch_protection_desc">تجاهل لمسات على إطار التطبيق المصغر عندما يكون مستشعر القرب مغطا.</string>
     <string name="settings_screen_request_unlock">سماح للقفل / تجاهل مركز الاشعارات</string>
     <string name="settings_screen_request_unlock_desc">اذا حدد التطبيق ان التطبيقات المصغرة ستقوم بتشغيل تطبيق،سيسمح بإلغاء القفل وتجاهل مركز الاشعارات. عطل هذا الخيار لتجنب هذا السلوك.</string>
-    <string name="settings_screen_hide_on_facewidgets">اخفاء في شاشة وجه التطبيق المصغر</string>
-    <string name="settings_screen_hide_on_facewidgets_desc">اخف الاطار حينما يكون وجه التطبيق المصغر معروض.</string>
+    <string name="settings_screen_hide_on_facewidgets">Hide on FaceWidgets (Now Bar) Screen</string>
+    <string name="settings_screen_hide_on_facewidgets_desc">Hide the frame when the FaceWidgets screen is shown. This is also known as the expanded Now Bar screen on One UI 7 and later.</string>
     <string name="settings_screen_hide_in_landscape">إخفاء في الوضع الأفقي</string>
     <string name="settings_screen_hide_in_landscape_desc">اخف التطبيق المصغر حينما يكون الجهاز في الوضع الأفقي.</string>
     <string name="settings_screen_separate_position_for_lock_nc">افصل مكان مركز الاشعارات حينما يكون مقفل</string>
@@ -158,7 +163,7 @@
     <string name="intro_notification_listener_desc">Lockscreen Widgets can hide the widget frame while there are notifications displayed. To do so, you\'ll need to enable the Notification Listener. You don\'t have to grant this right now.</string>
     <string name="intro_read_storage_title">Read External Storage</string>
     <string name="intro_read_storage_desc">Lockscreen Widgets has a \"masking\" mode, where it will use your wallpaper as the widget frame background, causing it to seem transparent, while also being able to cover lock screen elements. To do this, Lockscreen Widgets needs permission to be able to read your device\'s storage. You don\'t have to grant this right now. If you\'re running Lollipop, this permission is already granted. More details are available in the privacy policy.</string>
-    <string name="intro_read_external_storage_desc_13_addendum">On Android 13 and later, you will need to grant READ_MEDIA_IMAGES and use App Ops paired with Shizuku to grant this READ_EXTERNAL_STORAGE.</string>
+    <string name="intro_read_external_storage_desc_13_addendum">On Android 13 and later, you will need to use Shizuku to grant the required permissions.</string>
     <string name="intro_battery_optimization">Battery Optimization</string>
     <string name="intro_battery_optimization_desc">Many devices, including those running MIUI and EMUI, have incredibly aggressive battery management. This can cause Lockscreen Widgets to be killed when you don\'t want it to be. Click the button below to read how you can allowlist Lockscreen Widgets on your particular device.</string>
     <string name="intro_done_title">All Done!</string>
@@ -214,8 +219,16 @@
     <string name="drawer_column_count_desc">اختر عدد الأعمدة التي يجب أن يكون بها تخطيط الدرج.</string>
     <string name="drawer_side_padding">الحشوة الجانبية للدرج</string>
     <string name="drawer_side_padding_desc">تعيين مقدار المساحة التي يجب أن تظهر بين جانبي الشاشة وحواف التطبيقات المصغره الخارجية.</string>
+    <string name="drawer_hide_when_notification_panel_expanded">Hide When Notification Panel Opened</string>
+    <string name="drawer_hide_when_notification_panel_expanded_desc">Dismiss the widget drawer when the notification panel is expanded behind it.</string>
+    <string name="drawer_handle_tap_to_open">Single-Tap Handle to Open Drawer</string>
+    <string name="drawer_handle_tap_to_open_desc">Single-tapping the handle will open the drawer immediately instead of requiring a drag or a double tap.</string>
+    <string name="drawer_handle_lock_position">Lock Handle Position</string>
+    <string name="drawer_handle_lock_position_desc">Prevents the drawer handle from being moved.</string>
     <string name="show_only_when_locked">إظهار فقط عند القفل</string>
     <string name="show_only_when_locked_desc">إظهار شريط الدرج فقط عندما يكون الجهاز على شاشة القفل.</string>
+    <string name="icon_pack">Icon Pack</string>
+    <string name="icon_pack_desc">Choose an icon pack for shortcut icons. This applies to both the frame and the drawer.</string>
     <string name="allow_show_frame">السماح بعرض الإطار</string>
     <string name="disallow_show_frame">عدم السماح بعرض الإطار</string>
     <string name="frame_allowed_to_show">الإطار المسموح به للعرض</string>
@@ -229,13 +242,36 @@
     <string name="in_notification_center">في مركز الاشعارات</string>
     <string name="in_locked_notification_center">في مركز الإشعارات المقفل</string>
     <string name="reset_frame_position_size_confirm_message">هل أنت متأكد من أنك تريد إعادة تعيين الموقع والحجم؟</string>
-    <string name="install_app_ops">تثبيت تطبيقات</string>
-    <string name="open_app_ops">فتح تطبيقات</string>
+    <string name="install_shizuku">Install Shizuku</string>
+    <string name="open_shizuku">Open Shizuku</string>
     <string name="grant_read_media_images">منح قراءة الوسائط والصور</string>
     <string name="failed_to_add_shortcut">غير قادر على إضافة الاختصار.</string>
     <string name="directly_check_for_activity">التحقق مباشرة من النشاط</string>
-    <string name="directly_check_for_activity_desc">عند التمكين، ستستخدم تطبيقات مصغرة قفل الشاشة API لنظام أندرويد للتحقق مما إذا كان يتم تشغيل نشاط النقر على عنصر واجهة المستخدم. يمكن أن يكون هذا أسرع من الكشف المدمج لشاشة القفل، ولكن قد يسبب إيجابيات زائفة.</string>
+    <string name="directly_check_for_activity_desc">When enabled, Lockscreen Widgets will use Android\'s API to check whether a widget tap is launching an Activity. This can be faster than Lockscreen Widgets\' built-in detection, but may cause false positives.</string>
     <string name="translate">ترجمة</string>
     <string name="translate_desc">ساعد بترجمة تطبيقات مصغرة الى لغتك.</string>
     <string name="error_reconfiguring_widget">Error reconfiguring widget</string>
+    <string name="system_icons">System Icons</string>
+    <string name="choose_icon_pack">Choose Icon Pack</string>
+    <string name="choose_icon_override">Choose Icon Override</string>
+    <string name="selected_pack">Currently selected icon pack</string>
+    <string name="blank_widget">Blank Widget</string>
+    <string name="add_frame">Add Widget Frame</string>
+    <string name="remove_frame">Remove Widget Frame</string>
+    <string name="remove_frame_confirmation_message">Are you sure you want to remove this frame?</string>
+    <string name="select">Select</string>
+    <string name="cancel">Cancel</string>
+    <string name="apply">Apply</string>
+    <string name="select_frame">Select Frame</string>
+    <string name="selected_frame">Selected frame: %s</string>
+    <string name="settings_screen_category_grid">Grid</string>
+    <plurals name="frame_count_info">
+        <item quantity="zero">%s frames added</item>
+        <item quantity="one">%s frame added</item>
+        <item quantity="two">%s frames added</item>
+        <item quantity="few">%s frames added</item>
+        <item quantity="many">%s frames added</item>
+        <item quantity="other">%s frames added</item>
+    </plurals>
+    <string name="frame_management">Frame Management</string>
 </resources>

@@ -3,7 +3,6 @@ package tk.zwander.common.util
 import android.annotation.IntegerRes
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.ContextWrapper
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.SharedPreferences.OnSharedPreferenceChangeListener
@@ -17,9 +16,11 @@ import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
 import com.joaomgcd.taskerpluginlibrary.extensions.requestQuery
+import tk.zwander.common.data.SafePointF
 import tk.zwander.common.data.WidgetData
 import tk.zwander.common.data.WidgetSizeData
 import tk.zwander.common.data.WidgetTileInfo
+import tk.zwander.common.iconpacks.IconEntry
 import tk.zwander.lockscreenwidgets.BuildConfig
 import tk.zwander.lockscreenwidgets.R
 import tk.zwander.lockscreenwidgets.activities.TaskerIsAllowedToShowFrame
@@ -34,7 +35,7 @@ val Context.prefManager: PrefManager
  * Handle data persistence.
  */
 @Suppress("DeprecatedCallableAddReplaceWith")
-class PrefManager private constructor(context: Context) : ContextWrapper(context) {
+class PrefManager private constructor(private val context: Context) {
     companion object {
         const val KEY_CURRENT_WIDGETS = "current_widgets"
         const val KEY_FRAME_WIDTH = "frame_width"
@@ -118,6 +119,12 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
         const val KEY_FRAME_IGNORE_WIDGET_TOUCHES = "frame_ignore_widget_touches"
         const val KEY_FRAME_DIRECTLY_CHECK_FOR_ACTIVITY = "frame_directly_check_for_activity"
         const val KEY_DRAWER_DIRECTLY_CHECK_FOR_ACTIVITY = "drawer_directly_check_for_activity"
+        const val KEY_DRAWER_HIDE_WHEN_NOTIFICATION_PANEL_OPEN = "drawer_hide_when_notification_panel_open"
+        const val KEY_DRAWER_HANDLE_TAP_TO_OPEN = "drawer_handle_tap_to_open"
+        const val KEY_SELECTED_ICON_PACK_PACKAGE = "selected_icon_pack_package"
+        const val KEY_SHORTCUT_OVERRIDE_ICONS = "shortcut_override_icon_entries"
+        const val KEY_CURRENT_FRAMES = "current_secondary_widget_frames"
+        const val KEY_DRAWER_HANDLE_LOCK_POSITION = "drawer_handle_lock_position"
 
         const val VALUE_PAGE_INDICATOR_BEHAVIOR_HIDDEN = 0
         const val VALUE_PAGE_INDICATOR_BEHAVIOR_AUTO_HIDE = 1
@@ -134,18 +141,19 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
     }
 
     //The actual SharedPreferences implementation
-    private val prefs: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(this)
+    private val prefs: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
     val gson: Gson = GsonBuilder()
         .setExclusionStrategies(CrashFixExclusionStrategy())
         .registerTypeAdapter(Uri::class.java, GsonUriHandler())
         .registerTypeAdapter(Intent::class.java, GsonIntentHandler())
+        .registerTypeAdapter(SafePointF::class.java, GsonSafePointFHandler())
         .create()
 
     //The widgets currently added to the widget frame
     var currentWidgets: LinkedHashSet<WidgetData>
         get() = gson.fromJson(
             currentWidgetsString,
-            object : TypeToken<LinkedHashSet<WidgetData>>() {}.type
+            object : TypeToken<LinkedHashSet<WidgetData>>() {}.type,
         ) ?: LinkedHashSet()
         set(value) {
             currentWidgetsString = gson.toJson(value)
@@ -161,7 +169,7 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
     var drawerWidgets: LinkedHashSet<WidgetData>
         get() = gson.fromJson(
             drawerWidgetsString,
-            object : TypeToken<LinkedHashSet<WidgetData>>() {}.type
+            object : TypeToken<LinkedHashSet<WidgetData>>() {}.type,
         ) ?: LinkedHashSet()
         set(value) {
             drawerWidgetsString = gson.toJson(value)
@@ -177,7 +185,7 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
     var shortcutIds: LinkedHashSet<String>
         get() = gson.fromJson(
             getString(KEY_SHORTCUT_IDS),
-            object : TypeToken<LinkedHashSet<String>>() {}.type
+            object : TypeToken<LinkedHashSet<String>>() {}.type,
         ) ?: LinkedHashSet()
         set(value) {
             putString(
@@ -210,7 +218,7 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
     var widgetSizes: HashMap<Int, WidgetSizeData>
         get() = gson.fromJson(
             getString(KEY_WIDGET_SIZES),
-            object : TypeToken<HashMap<Int, WidgetSizeData>>() {}.type
+            object : TypeToken<HashMap<Int, WidgetSizeData>>() {}.type,
         ) ?: HashMap()
         set(value) {
             putString(
@@ -277,7 +285,7 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
     //The horizontal position of the center of the frame in the NC (from the center of the screen) in pixels
     @Deprecated("Use [FrameSizeAndPosition] instead.")
     var notificationPosX: Int
-        get() = getInt(KEY_NOTIFICATION_POS_X, calculateNCPosXFromRightDefault(FrameSizeAndPosition.FrameType.NotificationNormal.Portrait))
+        get() = getInt(KEY_NOTIFICATION_POS_X, context.calculateNCPosXFromRightDefault(FrameSizeAndPosition.FrameType.NotificationNormal.Portrait))
         set(value) {
             putInt(KEY_NOTIFICATION_POS_X, value)
         }
@@ -285,7 +293,7 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
     //The horizontal position of the center of the frame in the locked NC (from the center of the screen) in pixels
     @Deprecated("Use [FrameSizeAndPosition] instead.")
     var lockNotificationPosX: Int
-        get() = getInt(KEY_LOCK_NOTIFICATION_POS_X, calculateNCPosXFromRightDefault(FrameSizeAndPosition.FrameType.LockNotification.Portrait))
+        get() = getInt(KEY_LOCK_NOTIFICATION_POS_X, context.calculateNCPosXFromRightDefault(FrameSizeAndPosition.FrameType.LockNotification.Portrait))
         set(value) {
             putInt(KEY_LOCK_NOTIFICATION_POS_X, value)
         }
@@ -309,7 +317,7 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
     //The vertical position of the center of the frame in the NC (from the center of the screen) in pixels
     @Deprecated("Use [FrameSizeAndPosition] instead.")
     var notificationPosY: Int
-        get() = getInt(KEY_NOTIFICATION_POS_Y, calculateNCPosYFromTopDefault(FrameSizeAndPosition.FrameType.NotificationNormal.Portrait))
+        get() = getInt(KEY_NOTIFICATION_POS_Y, context.calculateNCPosYFromTopDefault(FrameSizeAndPosition.FrameType.NotificationNormal.Portrait))
         set(value) {
             putInt(KEY_NOTIFICATION_POS_Y, value)
         }
@@ -317,7 +325,7 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
     //The vertical position of the center of the frame in the NC (from the center of the screen) in pixels
     @Deprecated("Use [FrameSizeAndPosition] instead.")
     var lockNotificationPosY: Int
-        get() = getInt(KEY_LOCK_NOTIFICATION_POS_Y, calculateNCPosYFromTopDefault(FrameSizeAndPosition.FrameType.LockNotification.Portrait))
+        get() = getInt(KEY_LOCK_NOTIFICATION_POS_Y, context.calculateNCPosYFromTopDefault(FrameSizeAndPosition.FrameType.LockNotification.Portrait))
         set(value) {
             putInt(KEY_LOCK_NOTIFICATION_POS_Y, value)
         }
@@ -350,7 +358,7 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
     var customTiles: HashMap<Int, WidgetTileInfo>
         get() = gson.fromJson(
             getString(KEY_CUSTOM_TILES, null),
-            object : TypeToken<HashMap<Int, WidgetTileInfo>>(){}.type
+            object : TypeToken<HashMap<Int, WidgetTileInfo>>(){}.type,
         ) ?: HashMap()
         set(value) {
             putString(
@@ -387,34 +395,11 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
             putBoolean(KEY_FIRST_RUN, value)
         }
 
-    //Whether or not the widget frame should hide when there are > min priority
-    //notifications shown.
-    var hideOnNotifications: Boolean
-        get() = getBoolean(KEY_HIDE_ON_NOTIFICATIONS, false)
-        set(value) {
-            putBoolean(KEY_HIDE_ON_NOTIFICATIONS, value)
-        }
-
     //Whether the widget frame is actually enabled.
     var widgetFrameEnabled: Boolean
         get() = getBoolean(KEY_WIDGET_FRAME_ENABLED, false)
         set(value) {
             putBoolean(KEY_WIDGET_FRAME_ENABLED, value)
-        }
-
-    //Whether the widget frame should hide on the password/pin/fingerprint/pattern
-    //input screen.
-    var hideOnSecurityPage: Boolean
-        get() = getBoolean(KEY_HIDE_ON_SECURITY_PAGE, true)
-        set(value) {
-            putBoolean(KEY_HIDE_ON_SECURITY_PAGE, value)
-        }
-
-    //Whether the widget frame should hide when the notification shade is down.
-    var hideOnNotificationShade: Boolean
-        get() = getBoolean(KEY_HIDE_ON_NOTIFICATION_SHADE, false)
-        set(value) {
-            putBoolean(KEY_HIDE_ON_NOTIFICATION_SHADE, value)
         }
 
     //Whether the widget frame should animate its hide/show sequences.
@@ -439,24 +424,10 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
             putBoolean(KEY_SHOW_DEBUG_ID_VIEW, value)
         }
 
-    //Whether the widget frame should use a separate position in the notification center
-    //when locked.
-    var separatePosForLockNC: Boolean
-        get() = getBoolean(KEY_SEPARATE_POS_FOR_LOCK_NC, false)
-        set(value) {
-            putBoolean(KEY_SEPARATE_POS_FOR_LOCK_NC, value)
-        }
-
     var showDrawerHandleOnlyWhenLocked: Boolean
         get() = getBoolean(KEY_SHOW_DRAWER_HANDLE_ONLY_WHEN_LOCKED, false)
         set(value) {
             putBoolean(KEY_SHOW_DRAWER_HANDLE_ONLY_WHEN_LOCKED, value)
-        }
-
-    var hideFrameWhenKeyboardShown: Boolean
-        get() = getBoolean(KEY_FRAME_HIDE_WHEN_KEYBOARD_SHOWN, false)
-        set(value) {
-            putBoolean(KEY_FRAME_HIDE_WHEN_KEYBOARD_SHOWN, value)
         }
 
     //How the page indicator (scrollbar) should behave (always show, fade out on inactivity, never show).
@@ -467,30 +438,6 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
         }
         set(value) {
             putString(KEY_PAGE_INDICATOR_BEHAVIOR, value.toString())
-        }
-
-    //The background color of the widget frame.
-    var backgroundColor: Int
-        get() = getInt(KEY_FRAME_BACKGROUND_COLOR, Color.TRANSPARENT)
-        set(value) {
-            putInt(KEY_FRAME_BACKGROUND_COLOR, value)
-        }
-
-    //Whether masked mode is enabled.
-    //On compatible devices with a proper wallpaper setup,
-    //this will emulate a transparent widget background by
-    //drawing the user's wallpaper as the frame background.
-    var maskedMode: Boolean
-        get() = getBoolean(KEY_FRAME_MASKED_MODE, false)
-        set(value) {
-            putBoolean(KEY_FRAME_MASKED_MODE, value)
-        }
-
-    //Whether the frame background should be blurred.
-    var blurBackground: Boolean
-        get() = getBoolean(KEY_BLUR_BACKGROUND, false)
-        set(value) {
-            putBoolean(KEY_BLUR_BACKGROUND, value)
         }
 
     var blurDrawerBackground: Boolean
@@ -519,13 +466,6 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
             putInt(KEY_FRAME_ROW_COUNT, value)
         }
 
-    //The degree of the background blur
-    var backgroundBlurAmount: Int
-        get() = getInt(KEY_BLUR_BACKGROUND_AMOUNT, 100)
-        set(value) {
-            putInt(KEY_BLUR_BACKGROUND_AMOUNT, value)
-        }
-
     var drawerBackgroundBlurAmount: Int
         get() = getInt(KEY_BLUR_DRAWER_BACKGROUND_AMOUNT, 100)
         set(value) {
@@ -533,47 +473,29 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
         }
 
     //How much to dim the masked mode wallpaper (in percent)
+    @Deprecated("Use FrameSpecificPreferences instead")
     var wallpaperDimAmount: Float
         get() = getInt(KEY_MASKED_MODE_DIM_AMOUNT, 0) / 100f
         set(value) {
             putInt(KEY_MASKED_MODE_DIM_AMOUNT, (value * 100f).toInt())
         }
 
-    //Whether to show in the notification center.
-    //This mode has separate dimensions and positioning
-    //vs the standard lock screen mode.
-    //Only available for Samsung One UI 1.0 and later.
-    var showInNotificationCenter: Boolean
-        get() = getBoolean(KEY_SHOW_IN_NOTIFICATION_CENTER, false) && isOneUI
-        set(value) {
-            putBoolean(KEY_SHOW_IN_NOTIFICATION_CENTER, value)
-        }
-
-    //A dependent option for [showInNotificationCenter].
-    //Disabling this while [showInNotificationCenter] is enabled
-    //will cause the widget frame to only show in the notification center.
-    var showOnMainLockScreen: Boolean
-        get() = getBoolean(KEY_SHOW_ON_MAIN_LOCK_SCREEN, true) || !showInNotificationCenter
-        set(value) {
-            putBoolean(KEY_SHOW_ON_MAIN_LOCK_SCREEN, value)
-        }
-
     //The corner radius for the widget frame
     //(how rounded the corners are, in dp)
     var cornerRadiusDp: Float
-        get() = getInt(KEY_FRAME_CORNER_RADIUS, resources.getInteger(R.integer.def_corner_radius_dp_scaled_10x)) / 10f
+        get() = getInt(KEY_FRAME_CORNER_RADIUS, context.resources.getInteger(R.integer.def_corner_radius_dp_scaled_10x)) / 10f
         set(value) {
             putInt(KEY_FRAME_CORNER_RADIUS, (value * 10f).toInt())
         }
 
     var frameWidgetCornerRadiusDp: Float
-        get() = getInt(KEY_FRAME_WIDGET_CORNER_RADIUS, resources.getInteger(R.integer.def_corner_radius_dp_scaled_10x)) / 10f
+        get() = getInt(KEY_FRAME_WIDGET_CORNER_RADIUS, context.resources.getInteger(R.integer.def_corner_radius_dp_scaled_10x)) / 10f
         set(value) {
             putInt(KEY_FRAME_WIDGET_CORNER_RADIUS, (value * 10f).toInt())
         }
 
     var drawerWidgetCornerRadiusDp: Float
-        get() = getInt(KEY_DRAWER_WIDGET_CORNER_RADIUS, resources.getInteger(R.integer.def_corner_radius_dp_scaled_10x)) / 10f
+        get() = getInt(KEY_DRAWER_WIDGET_CORNER_RADIUS, context.resources.getInteger(R.integer.def_corner_radius_dp_scaled_10x)) / 10f
         set(value) {
             putInt(KEY_DRAWER_WIDGET_CORNER_RADIUS, (value * 10f).toInt())
         }
@@ -602,14 +524,6 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
             putBoolean(KEY_REQUEST_UNLOCK_DRAWER, value)
         }
 
-    //Whether to hide the frame when Samsung's FaceWidgets screen is showing.
-    //(One UI 3.0+)
-    var hideOnFaceWidgets: Boolean
-        get() = getBoolean(KEY_HIDE_ON_FACEWIDGETS, false)
-        set(value) {
-            putBoolean(KEY_HIDE_ON_FACEWIDGETS, value)
-        }
-
     //Whether to hide the frame in landscape.
     var hideInLandscape: Boolean
         get() = getBoolean(KEY_HIDE_IN_LANDSCAPE, false)
@@ -628,12 +542,6 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
         get() = getBoolean(KEY_LOCK_WIDGET_DRAWER, false)
         set(value) {
             putBoolean(KEY_LOCK_WIDGET_DRAWER, value)
-        }
-
-    var frameIgnoreWidgetTouches: Boolean
-        get() = getBoolean(KEY_FRAME_IGNORE_WIDGET_TOUCHES, false)
-        set(value) {
-            putBoolean(KEY_FRAME_IGNORE_WIDGET_TOUCHES, value)
         }
 
     //The duration of the fade-in/out animation.
@@ -660,12 +568,6 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
         get() = getBoolean(KEY_SHOW_DRAWER_HANDLE, true)
         set(value) {
             putBoolean(KEY_SHOW_DRAWER_HANDLE, value)
-        }
-
-    var hideOnEdgePanel: Boolean
-        get() = getBoolean(KEY_HIDE_ON_EDGE_PANEL, true)
-        set(value) {
-            putBoolean(KEY_HIDE_ON_EDGE_PANEL, value)
         }
 
     var drawerHandleHeight: Int
@@ -712,7 +614,7 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
         }
 
     var drawerBackgroundColor: Int
-        get() = getInt(KEY_DRAWER_BACKGROUND_COLOR, ResourcesCompat.getColor(resources, R.color.drawerBackgroundDefault, theme))
+        get() = getInt(KEY_DRAWER_BACKGROUND_COLOR, ResourcesCompat.getColor(context.resources, R.color.drawerBackgroundDefault, context.theme))
         set(value) {
             putInt(KEY_DRAWER_BACKGROUND_COLOR, value)
         }
@@ -745,14 +647,14 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
         get() = getBoolean(KEY_CAN_SHOW_FRAME_FROM_TASKER, true)
         set(value) {
             putBoolean(KEY_CAN_SHOW_FRAME_FROM_TASKER, value)
-            TaskerIsAllowedToShowFrame::class.java.requestQuery(this)
+            TaskerIsAllowedToShowFrame::class.java.requestQuery(context)
         }
 
     var forceShowFrame: Boolean
         get() = getBoolean(KEY_FORCE_SHOW_FRAME, false)
         set(value) {
             putBoolean(KEY_FORCE_SHOW_FRAME, value)
-            TaskerIsForceShowingFrame::class.java.requestQuery(this)
+            TaskerIsForceShowingFrame::class.java.requestQuery(context)
         }
 
     var frameForceWidgetReload: Boolean
@@ -765,6 +667,45 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
         get() = getBoolean(KEY_DRAWER_FORCE_RELOAD_WIDGETS, true)
         set(value) {
             putBoolean(KEY_DRAWER_FORCE_RELOAD_WIDGETS, value)
+        }
+
+    var drawerHideWhenNotificationPanelOpen: Boolean
+        get() = getBoolean(KEY_DRAWER_HIDE_WHEN_NOTIFICATION_PANEL_OPEN, false)
+        set(value) {
+            putBoolean(KEY_DRAWER_HIDE_WHEN_NOTIFICATION_PANEL_OPEN, value)
+        }
+
+    var drawerHandleTapToOpen: Boolean
+        get() = getBoolean(KEY_DRAWER_HANDLE_TAP_TO_OPEN, false)
+        set(value) {
+            putBoolean(KEY_DRAWER_HANDLE_TAP_TO_OPEN, value)
+        }
+
+    var selectedIconPackPackage: String?
+        get() = getString(KEY_SELECTED_ICON_PACK_PACKAGE, null)
+        set(value) {
+            putString(KEY_SELECTED_ICON_PACK_PACKAGE, value)
+        }
+
+    var shortcutOverrideIcons: HashMap<Int, IconEntry>
+        get() = gson.fromJson(
+            getString(KEY_SHORTCUT_OVERRIDE_ICONS, ""),
+            object : TypeToken<HashMap<Int, IconEntry>>() {},
+        ) ?: HashMap()
+        set(value) {
+            putString(KEY_SHORTCUT_OVERRIDE_ICONS, gson.toJson(value))
+        }
+
+    var currentSecondaryFrames: List<Int>
+        get() = getStringSet(KEY_CURRENT_FRAMES, setOf()).map { it.toInt() }
+        set(value) {
+            putStringSet(KEY_CURRENT_FRAMES, value.map { it.toString() }.toSet())
+        }
+
+    var drawerHandleLockPosition: Boolean
+        get() = getBoolean(KEY_DRAWER_HANDLE_LOCK_POSITION, false)
+        set(value) {
+            putBoolean(KEY_DRAWER_HANDLE_LOCK_POSITION, value)
         }
 
     @Suppress("DEPRECATION")
@@ -821,7 +762,7 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
     fun getFloat(key: String, def: Float): Float = prefs.getFloat(key, def)
     fun getInt(key: String, def: Int): Int = prefs.getInt(key, def)
     fun getBoolean(key: String, def: Boolean): Boolean = prefs.getBoolean(key, def)
-    fun getStringSet(key: String, def: Set<String>): Set<String> = prefs.getStringSet(key, def).toSet()
+    fun getStringSet(key: String, def: Set<String>): Set<String> = prefs.getStringSet(key, def)?.toSet() ?: def
 
     fun putString(key: String, value: String?) = prefs.edit(true) { putString(key, value) }
     fun putFloat(key: String, value: Float) = prefs.edit(true) { putFloat(key, value) }
@@ -829,7 +770,9 @@ class PrefManager private constructor(context: Context) : ContextWrapper(context
     fun putBoolean(key: String, value: Boolean) = prefs.edit(true) { putBoolean(key, value) }
     fun putStringSet(key: String, value: Set<String>) = prefs.edit(true) { putStringSet(key, value) }
 
+    fun remove(key: String) = prefs.edit(true) { remove(key) }
+
     fun getResourceFloat(@IntegerRes resource: Int): Float {
-        return resources.getInteger(resource).toFloat()
+        return context.resources.getInteger(resource).toFloat()
     }
 }

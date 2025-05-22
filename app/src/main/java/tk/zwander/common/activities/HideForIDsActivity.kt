@@ -11,10 +11,12 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import com.bugsnag.android.performance.compose.MeasuredComposable
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.MutableStateFlow
 import tk.zwander.common.compose.AppTheme
+import tk.zwander.common.util.contracts.rememberCreateDocumentLauncherWithDownloadFallback
 import tk.zwander.common.util.logUtils
 import tk.zwander.common.util.prefManager
 import tk.zwander.lockscreenwidgets.R
@@ -67,36 +69,27 @@ class HideForIDsActivity : BaseActivity() {
     private val gson by lazy { prefManager.gson }
     private val format = SimpleDateFormat("yyyy-MM-dd_HH:mm:ss", Locale.getDefault())
 
-    private val saveRequest = registerForActivityResult(ActivityResultContracts.CreateDocument("text/*")) { uri ->
-        //Write the current list of IDs to the specified file
-        contentResolver.openOutputStream(uri ?: return@registerForActivityResult)?.use { out ->
-            val stringified = gson.toJson(items.value)
-
-            out.bufferedWriter().use { writer ->
-                writer.append(stringified)
-            }
-        }
-    }
-
     private val openRequest = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         //Copy the IDs stored in the specified file to the list here
         contentResolver.openInputStream(uri ?: return@registerForActivityResult)?.use { input ->
-            val builder = StringBuilder()
-
-            input.bufferedReader().useLines { seq ->
-                seq.forEach {
-                    builder.append(it)
-                }
-            }
-
             val list = try {
+                val builder = StringBuilder()
+
+                input.bufferedReader().useLines { seq ->
+                    seq.forEach {
+                        builder.append(it)
+                    }
+                }
+
                 gson.fromJson<HashSet<String>>(
                     builder.toString(),
-                    object : TypeToken<HashSet<String>>() {}.type
+                    object : TypeToken<HashSet<String>>() {}.type,
                 )
+            } catch (e: OutOfMemoryError) {
+                logUtils.debugLog("OOM thrown when trying to restore ID list", e)
+                null
             } catch (e: Exception) {
                 logUtils.debugLog("Unable to parse ID list", e)
-
                 null
             }
 
@@ -124,30 +117,43 @@ class HideForIDsActivity : BaseActivity() {
         setContent {
             val items by this.items.collectAsState()
 
-            AppTheme {
-                HideForIDsLayout(
-                    items = items,
-                    title = title.toString(),
-                    onAdd = {
-                        if (it.contains(":id/")) {
-                            this.items.value = TreeSet(items + it)
-                        } else {
-                            this.items.value = TreeSet(items + "com.android.systemui:id/$it")
-                        }
-                    },
-                    onRemove = {
-                        this.items.value = TreeSet(items - it)
-                    },
-                    onBackUpClicked = {
-                        saveRequest.launch("LockscreenWidgets_ID_Backup_${format.format(Date())}.lsw")
-                    },
-                    onRestoreClicked = {
-                        openRequest.launch(arrayOf("*/*"))
-                    },
-                    modifier = Modifier.fillMaxSize()
-                        .systemBarsPadding()
-                        .imePadding()
-                )
+            val saveRequest = rememberCreateDocumentLauncherWithDownloadFallback(mimeType = "text/plain") { uri ->
+                //Write the current list of IDs to the specified file
+                contentResolver.openOutputStream(uri ?: return@rememberCreateDocumentLauncherWithDownloadFallback)?.use { out ->
+                    val stringified = gson.toJson(this.items.value)
+
+                    out.bufferedWriter().use { writer ->
+                        writer.append(stringified)
+                    }
+                }
+            }
+
+            MeasuredComposable(name = "HideForIDsLayout-${type}") {
+                AppTheme {
+                    HideForIDsLayout(
+                        items = items,
+                        title = title.toString(),
+                        onAdd = {
+                            if (it.contains(":id/")) {
+                                this@HideForIDsActivity.items.value = TreeSet(items + it)
+                            } else {
+                                this@HideForIDsActivity.items.value = TreeSet(items + "com.android.systemui:id/$it")
+                            }
+                        },
+                        onRemove = {
+                            this@HideForIDsActivity.items.value = TreeSet(items - it)
+                        },
+                        onBackUpClicked = {
+                            saveRequest.launch("LockscreenWidgets_ID_Backup_${format.format(Date())}.lsw")
+                        },
+                        onRestoreClicked = {
+                            openRequest.launch(arrayOf("*/*"))
+                        },
+                        modifier = Modifier.fillMaxSize()
+                            .systemBarsPadding()
+                            .imePadding()
+                    )
+                }
             }
         }
     }

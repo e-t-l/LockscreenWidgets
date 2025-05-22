@@ -1,83 +1,104 @@
 package tk.zwander.common.util
 
 import android.content.Context
-import android.content.ContextWrapper
 import android.os.Build
 import android.view.View
 import android.view.View.OnAttachStateChangeListener
 import android.view.WindowManager
-import tk.zwander.common.drawable.BackgroundBlurDrawableCompatDelegate
+import tk.zwander.common.drawable.BackgroundBlurDrawableCompat
+import java.util.function.Consumer
+
+val Context.shouldShowBlurOptions: Boolean
+    get() {
+        return (isOneUI && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) ||
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && windowManager.isCrossWindowBlurEnabled)
+    }
 
 class BlurManager(
-    context: Context,
+    private val windowManager: WindowManager,
+    private val context: Context,
     private val params: WindowManager.LayoutParams,
     private val targetView: View,
-    private val listenKeys: Array<String>,
+    private val listenKeys: List<String>,
     private val shouldBlur: () -> Boolean,
     private val blurAmount: () -> Int,
-    private val cornerRadius: (() -> Float)? = null,
     private val updateWindow: () -> Unit,
-) : ContextWrapper(context), OnAttachStateChangeListener {
+    private val cornerRadius: () -> Float = { 0f },
+) : OnAttachStateChangeListener {
     private val handlerRegistry = HandlerRegistry {
-        handler(*listenKeys) {
+        handler(listenKeys) {
             updateBlur()
         }
     }
-    private val crossBlurEnabledListener = { _: Boolean ->
-        updateBlur()
+    private val crossBlurEnabledListener = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        Consumer<Boolean> {
+            updateBlur()
+        }
+    } else {
+        null
     }
 
-    private var blurWrapper: BackgroundBlurDrawableCompatDelegate? = null
+    private var blurDrawable: BackgroundBlurDrawableCompat? = null
 
-    override fun onViewAttachedToWindow(v: View?) {
+    override fun onViewAttachedToWindow(v: View) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            windowManager.addCrossWindowBlurEnabledListener(crossBlurEnabledListener)
+            crossBlurEnabledListener?.let { windowManager.addCrossWindowBlurEnabledListener(it) }
         }
         updateBlur()
     }
 
-    override fun onViewDetachedFromWindow(v: View?) {
+    override fun onViewDetachedFromWindow(v: View) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            windowManager.removeCrossWindowBlurEnabledListener(crossBlurEnabledListener)
+            crossBlurEnabledListener?.let { windowManager.removeCrossWindowBlurEnabledListener(it) }
         }
         targetView.background = null
-        blurWrapper = null
+        blurDrawable = null
     }
 
     fun onCreate() {
         targetView.addOnAttachStateChangeListener(this)
-        handlerRegistry.register(this)
+        handlerRegistry.register(context)
     }
 
     fun onDestroy() {
         targetView.removeOnAttachStateChangeListener(this)
-        handlerRegistry.unregister(this)
+        handlerRegistry.unregister(context)
     }
 
-    fun updateBlur() {
+    fun updateBlur(fromParamsUpdate: Boolean = false) {
         val blurAmount = blurAmount()
         val shouldBlur = shouldBlur()
+        val cornerRadius = cornerRadius()
+
+        context.logUtils.debugLog("Updating blur for $targetView. Should blur $shouldBlur, amount $blurAmount, radius $cornerRadius.")
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (blurWrapper == null
-                && blurAmount > 0
-                && shouldBlur
-                && targetView.isAttachedToWindow
-                && windowManager.isCrossWindowBlurEnabled
-            ) {
-                blurWrapper = BackgroundBlurDrawableCompatDelegate(targetView.rootView.viewRootImpl)
-            }
+            if (!fromParamsUpdate) {
+                if (blurAmount > 0 &&
+                    shouldBlur &&
+                    targetView.isAttachedToWindow &&
+                    windowManager.isCrossWindowBlurEnabled &&
+                    targetView.rootView.viewRootImpl.isHardwareEnabled &&
+                    targetView.alpha > 0
+                ) {
+                    if (blurDrawable == null) {
+                        context.logUtils.debugLog("Creating BackgroundBlurDrawableCompat.", null)
+                        blurDrawable = BackgroundBlurDrawableCompat(targetView.rootView.viewRootImpl)
+                    }
+                } else {
+                    blurDrawable = null
+                }
 
-            blurWrapper?.setBlurRadius(blurAmount)
-            cornerRadius?.invoke()?.let { cr ->
-                blurWrapper?.setCornerRadius(cr)
-            }
+                blurDrawable?.setBlurRadius(blurAmount)
+                blurDrawable?.setCornerRadius(cornerRadius)
 
-            targetView.background = blurWrapper?.drawable
+                context.logUtils.debugLog("Setting blur drawable $blurDrawable on target view with current background ${targetView.background}.", null)
+                targetView.background = blurDrawable
+            }
         } else {
             val f = try {
                 params::class.java.getDeclaredField("samsungFlags")
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 return
             }
 
@@ -92,8 +113,8 @@ class BlurManager(
                 f?.set(params, f.get(params) as Int and 64.inv())
                 params.dimAmount = 0.0f
             }
-        }
 
-        updateWindow()
+            updateWindow()
+        }
     }
 }

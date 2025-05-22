@@ -1,6 +1,7 @@
 package tk.zwander.common.compose.add
 
 import android.content.pm.PackageManager
+import android.content.res.Resources
 import android.graphics.drawable.Drawable
 import android.os.Build
 import androidx.compose.foundation.Image
@@ -112,6 +113,24 @@ fun AddWidgetScroller(
                         }
                     }
 
+                    items(
+                        items = app.launcherItems.toList(),
+                        key = { it.itemInfo.activityInfo.componentNameCompat.flattenToString() + "launcher_item" },
+                    ) { launcherItem ->
+                        val icon = icon(
+                            info = launcherItem,
+                            key = launcherItem.itemInfo.activityInfo.componentNameCompat,
+                        )
+
+                        WidgetItem(
+                            image = icon,
+                            label = app.appName,
+                            subLabel = stringResource(R.string.launcher),
+                        ) {
+                            onSelected(launcherItem)
+                        }
+                    }
+
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
                         items(
                             items = app.launcherShortcuts.toList(),
@@ -162,8 +181,13 @@ private fun AppHeader(
 
             LaunchedEffect(key1 = app.appInfo.packageName) {
                 icon = withContext(Dispatchers.IO) {
-                    app.appInfo.loadIcon(context.packageManager)
-                        .mutate()
+                    try {
+                        app.appInfo.loadIcon(context.packageManager)
+                            .mutate()
+                    } catch (e: Throwable) {
+                        context.logUtils.normalLog("Unable to load app icon for ${app.appInfo.packageName}", e)
+                        null
+                    }
                 }
             }
 
@@ -196,16 +220,30 @@ private fun icon(
     }
 
     LaunchedEffect(key) {
-        icon = try {
-            withContext(Dispatchers.IO) {
+        icon = withContext(Dispatchers.IO) {
+            try {
                 info.icon?.loadDrawable(context)
-            }
-        } catch (e: PackageManager.NameNotFoundException) {
-            context.logUtils.normalLog("Unable to load icon for ${info.appInfo.appInfo.packageName}.", e)
-            null
-        } catch (e: NullPointerException) {
-            context.logUtils.normalLog("Unable to load icon for ${info.appInfo.appInfo.packageName}.", e)
-            null
+            } catch (e: PackageManager.NameNotFoundException) {
+                context.logUtils.normalLog(
+                    "Unable to load icon for ${info.appInfo.appInfo.packageName}, ${key}.",
+                    e,
+                )
+                null
+            } catch (e: NullPointerException) {
+                context.logUtils.normalLog(
+                    "Unable to load icon for ${info.appInfo.appInfo.packageName}, ${key}.",
+                    e,
+                )
+                null
+            } catch (e: OutOfMemoryError) {
+                context.logUtils.normalLog(
+                    "Unable to load icon for ${info.appInfo.appInfo.packageName}, ${key}.",
+                    e,
+                )
+                null
+            } catch (_: Resources.NotFoundException) {
+                info.appInfo.appInfo.loadIcon(context.packageManager)
+            } ?: info.appInfo.appInfo.loadIcon(context.packageManager)
         }
     }
 

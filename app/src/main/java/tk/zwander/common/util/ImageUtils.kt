@@ -10,10 +10,14 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.drawable.Drawable
 import android.util.Base64
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.res.ResourcesCompat
+import androidx.core.graphics.createBitmap
 import androidx.core.graphics.drawable.toBitmap
+import androidx.core.graphics.get
+import androidx.core.graphics.scale
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 
@@ -21,7 +25,7 @@ import java.io.IOException
 fun Context.getRemoteDrawable(
     packageName: String,
     resource: Intent.ShortcutIconResource?,
-): Drawable? {
+): Drawable {
     val appInfo = packageManager.getApplicationInfoInAnyState(packageName)
     val remRes = packageManager.getResourcesForApplication(appInfo)
 
@@ -43,14 +47,14 @@ fun Context.getRemoteDrawable(
     resourceId: Int,
     remRes: Resources,
     defaultGetter: () -> Drawable = { packageManager.getApplicationIcon(packageName) }
-): Drawable? {
+): Drawable {
     val drawable = when (resourceId) {
         0 -> defaultGetter()
         else -> {
             try {
                 ResourcesCompat.getDrawable(remRes, resourceId, remRes.newTheme())
                     ?: defaultGetter()
-            } catch (e: Resources.NotFoundException) {
+            } catch (_: Resources.NotFoundException) {
                 defaultGetter()
             }
         }
@@ -101,9 +105,7 @@ fun String?.base64ToBitmap(): Bitmap? {
     return base64ToByteArray()?.toBitmap()
 }
 
-context(Context)
-fun Drawable.toSafeBitmap(config: Bitmap.Config? = null, maxSize: Dp = 512.dp): Bitmap {
-    val density = density
+fun Drawable.toSafeBitmap(density: Density, config: Bitmap.Config? = null, maxSize: Dp = 512.dp): Bitmap {
     val maxSizePixels = with (density) { maxSize.toPx() }.toInt()
 
     return toBitmap(maxWidth = maxSizePixels, maxHeight = maxSizePixels, config = config)
@@ -114,7 +116,7 @@ fun Drawable.toBitmap(
     maxHeight: Int = intrinsicHeight,
     config: Bitmap.Config? = null,
 ): Bitmap {
-    var image = toBitmap(
+    val image = toBitmap(
         width = Integer.max(1, intrinsicWidth),
         height = Integer.max(
             1,
@@ -136,8 +138,7 @@ fun Drawable.toBitmap(
         } else {
             finalHeight = (maxWidth.toFloat() / ratioBitmap).toInt()
         }
-        image = Bitmap.createScaledBitmap(image, finalWidth, finalHeight, true)
-        image
+        image.scale(finalWidth, finalHeight)
     } else {
         image
     }
@@ -150,7 +151,7 @@ fun Bitmap.cropBitmapTransparency(): Bitmap {
     var maxY = -1
     for (y in 0 until height) {
         for (x in 0 until width) {
-            val alpha = getPixel(x, y) shr 24 and 255
+            val alpha = this[x, y] shr 24 and 255
             if (alpha > 0) // pixel is not 100% transparent
             {
                 if (x < minX) minX = x
@@ -172,7 +173,7 @@ fun Bitmap.cropBitmapTransparency(): Bitmap {
     )
 }
 
-fun String.textAsBitmap(textSize: Float, textColor: Int): Bitmap? {
+fun String.textAsBitmap(textSize: Float, textColor: Int): Bitmap {
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     paint.textSize = textSize
     paint.color = textColor
@@ -180,7 +181,7 @@ fun String.textAsBitmap(textSize: Float, textColor: Int): Bitmap? {
     val baseline: Float = -paint.ascent() // ascent() is negative
     val width = (paint.measureText(this) + 0.5f).toInt() // round
     val height = (baseline + paint.descent() + 0.5f).toInt()
-    val image = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val image = createBitmap(width, height)
     val canvas = Canvas(image)
     canvas.drawText(this, 0f, baseline, paint)
     return image

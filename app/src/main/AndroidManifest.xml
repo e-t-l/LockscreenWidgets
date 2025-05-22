@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
-    package="tk.zwander.lockscreenwidgets">
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-feature
         android:name="android.hardware.telephony"
@@ -12,8 +11,6 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
 <!--    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />-->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
-    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
@@ -27,7 +24,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" tools:node="remove" />
 
-    <uses-sdk tools:overrideLibrary="com.example.jetpack_loading" />
+    <uses-sdk tools:overrideLibrary="com.example.jetpack_loading,rikka.shizuku.provider,rikka.shizuku.api,rikka.shizuku.shared,rikka.shizuku.aidl" />
 
     <application
         android:allowBackup="true"
@@ -51,21 +48,18 @@
             android:label="@string/add_widget"
             android:excludeFromRecents="true"
             android:launchMode="singleTop"
+            android:theme="@style/AppTheme.NoActionBar"
             />
         <activity android:name="tk.zwander.common.activities.add.AddTileWidgetActivity"
             android:exported="true"
             android:label="@string/add_widget"
             android:excludeFromRecents="true"
             android:launchMode="singleTop"
+            android:theme="@style/AppTheme.NoActionBar"
             />
         <activity android:name="tk.zwander.common.activities.OnboardingActivity"
             android:exported="false"
             android:theme="@style/AppTheme"
-            />
-        <activity android:name="tk.zwander.lockscreenwidgets.activities.SettingsActivity"
-            android:exported="false"
-            android:label="@string/settings"
-            android:theme="@style/AppTheme.NoActionBar"
             />
         <activity android:name="tk.zwander.common.activities.DismissOrUnlockActivity"
             android:exported="false"
@@ -97,13 +91,17 @@
             android:label="@string/add_widget"
             android:excludeFromRecents="true"
             android:launchMode="singleTop"
+            android:theme="@style/AppTheme.NoActionBar"
             />
         <activity android:name="tk.zwander.widgetdrawer.activities.TriggerActivity"
             android:label="@string/open_drawer"
             android:theme="@style/AppTheme.Null"
             android:exported="true"
-            android:launchMode="singleInstancePerTask"
-            />
+            android:launchMode="singleInstancePerTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+            </intent-filter>
+        </activity>
         <activity-alias
             android:name=".activities.LaunchDrawer"
             android:targetActivity="tk.zwander.widgetdrawer.activities.TriggerActivity"
@@ -111,9 +109,19 @@
             android:exported="true"
             android:label="@string/open_widget_drawer">
             <intent-filter>
-                <action android:name="android.intent.action.CREATE_SHORTCUT" />
+                <action android:name="android.intent.action.MAIN" />
             </intent-filter>
         </activity-alias>
+        <activity
+            android:name="tk.zwander.widgetdrawer.activities.ShortcutConfigActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@style/AppTheme.Null"
+            android:label="@string/open_widget_drawer">
+            <intent-filter>
+                <action android:name="android.intent.action.CREATE_SHORTCUT" />
+            </intent-filter>
+        </activity>
         <activity android:name="tk.zwander.common.activities.HideOnAppsChooserActivity"
             android:label="@string/settings_screen_hide_on_present_apps"
             android:exported="false"
@@ -205,6 +213,24 @@
                 <action android:name="com.twofortyfouram.locale.intent.action.EDIT_CONDITION" />
             </intent-filter>
         </activity>
+        <activity android:name="tk.zwander.common.activities.SelectIconPackActivity"
+            android:exported="false"
+            android:label="@string/choose_icon_pack"
+            android:theme="@style/AppTheme.NoActionBar"
+            />
+        <activity android:name="tk.zwander.common.activities.SelectIconFromPackActivity"
+            android:exported="false"
+            android:label="@string/choose_icon_override"
+            android:theme="@style/AppTheme.NoActionBar"
+            />
+        <activity android:name="tk.zwander.widgetdrawer.activities.ComposeDrawerSettingsActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme.NoActionBar"
+            />
+        <activity android:name="tk.zwander.lockscreenwidgets.activities.ComposeFrameSettingsActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme.NoActionBar"
+            />
 
         <service
             android:name="tk.zwander.lockscreenwidgets.services.Accessibility"
@@ -235,7 +261,8 @@
             android:label="@string/frame_enabled"
             android:icon="@drawable/ic_baseline_power_settings_new_24"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
-            android:exported="true">
+            android:exported="true"
+            tools:targetApi="n">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
@@ -245,17 +272,8 @@
             android:label="@string/drawer_enabled"
             android:icon="@drawable/ic_baseline_power_settings_new_24"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.service.quicksettings.action.QS_TILE" />
-            </intent-filter>
-        </service>
-        <service
-            android:name="tk.zwander.common.tiles.NCTile"
-            android:label="@string/tile_show_in_notification_center"
-            android:icon="@drawable/ic_baseline_notifications_active_24"
-            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
-            android:exported="true">
+            android:exported="true"
+            tools:targetApi="n">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
@@ -265,7 +283,8 @@
             android:label="@string/app_name"
             android:icon="@drawable/ic_baseline_launch_24"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
-            android:exported="true">
+            android:exported="true"
+            tools:targetApi="n">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
@@ -279,7 +298,8 @@
             android:label="@string/app_name"
             android:icon="@drawable/ic_baseline_launch_24"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
-            android:exported="true">
+            android:exported="true"
+            tools:targetApi="n">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
@@ -293,7 +313,8 @@
             android:label="@string/app_name"
             android:icon="@drawable/ic_baseline_launch_24"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
-            android:exported="true">
+            android:exported="true"
+            tools:targetApi="n">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
@@ -307,7 +328,8 @@
             android:label="@string/app_name"
             android:icon="@drawable/ic_baseline_launch_24"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
-            android:exported="true">
+            android:exported="true"
+            tools:targetApi="n">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
@@ -321,7 +343,8 @@
             android:label="@string/app_name"
             android:icon="@drawable/ic_baseline_launch_24"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
-            android:exported="true">
+            android:exported="true"
+            tools:targetApi="n">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
@@ -339,6 +362,15 @@
             </intent-filter>
             <meta-data android:name="android.appwidget.provider"
                 android:resource="@xml/id_list_provider_info" />
+        </receiver>
+        <receiver android:name=".appwidget.BlankWidgetProvider"
+            android:label="@string/blank_widget"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider"
+                android:resource="@xml/blank_widget_provider_info" />
         </receiver>
 
         <receiver android:name="tk.zwander.common.appwidget.OpenDrawerProvider"
@@ -359,6 +391,14 @@
                 <action android:name="${applicationId}.action.OPEN_DRAWER" />
             </intent-filter>
         </receiver>
+
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
         <meta-data android:name="google_analytics_adid_collection_enabled" android:value="false" />
         <meta-data

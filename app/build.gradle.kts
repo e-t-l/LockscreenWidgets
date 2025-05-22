@@ -8,23 +8,33 @@ plugins {
 }
 
 android {
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         namespace = "tk.zwander.lockscreenwidgets"
         applicationId = "tk.zwander.lockscreenwidgets"
         minSdk = 22
-        targetSdk = 34
-        versionCode = 120
-        versionName = "2.15.8"
+        targetSdk = 35
+        versionCode = 142
+        versionName = "2.22.5"
 
         extensions.getByType(BasePluginExtension::class.java).archivesName.set("LockscreenWidgets_${versionName}")
+
+        @Suppress("UnstableApiUsage")
+        externalNativeBuild {
+            cmake {
+                cppFlags += ""
+                arguments.add("-DANDROID_WEAK_API_DEFS=ON")
+            }
+        }
     }
 
     buildFeatures {
         viewBinding = true
         compose = true
         buildConfig = true
+        aidl = true
+        prefab = true
     }
 
     buildTypes {
@@ -47,6 +57,13 @@ android {
 
     packaging {
         resources.excludes.add("META-INF/library_release.kotlin_module")
+        jniLibs.pickFirsts += "**/libbugsnag-ndk.so"
+    }
+    externalNativeBuild {
+        cmake {
+            path = file("CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 }
 
@@ -58,6 +75,7 @@ dependencies {
     implementation(libs.atomicfu)
 
     implementation(libs.core.ktx)
+    implementation(libs.core.remoteviews)
     implementation(libs.appcompat)
     implementation(libs.constraintlayout)
     implementation(libs.recyclerview)
@@ -68,8 +86,6 @@ dependencies {
     implementation(libs.material)
     implementation(libs.byte.buddy.android)
     implementation(libs.seekBarPreference)
-    implementation(libs.collapsiblePreferenceCategory)
-    implementation(libs.colorpicker)
     implementation(libs.patreonSupportersRetrieval)
     implementation(libs.spannedGridLayoutManager)
     implementation(libs.composeIntroSlider)
@@ -86,13 +102,22 @@ dependencies {
     implementation(libs.lifecycle.runtime.ktx)
 
     implementation(libs.accompanist.drawablepainter)
-    implementation(libs.accompanist.pager)
-    implementation(libs.accompanist.themeadapter.material)
-    implementation(libs.accompanist.themeadapter.material3)
 
     implementation(libs.bugsnag.android)
+    implementation(libs.bugsnag.exitinfo)
+    implementation(libs.bugsnag.android.performance)
+    implementation(libs.bugsnag.android.performance.appcompat)
+    implementation(libs.bugsnag.android.performance.compose)
+
     implementation(libs.taskerpluginlibrary)
 
     implementation(libs.relinker)
     implementation(libs.compose.spinkit)
+
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
+
+    implementation(libs.storage)
+
+    implementation(libs.colorpicker.compose)
 }
