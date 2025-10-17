@@ -12,7 +12,7 @@
 <!--    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />-->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
-        tools:ignore="QueryAllPackagesPermission" />
+        tools:ignore="PackageVisibilityPolicy,QueryAllPackagesPermission" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
 
     <uses-permission android:name="com.huawei.android.totemweather.permission.ACCESS_WEATHERCLOCK_PROVIDER" />
@@ -24,7 +24,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" tools:node="remove" />
 
-    <uses-sdk tools:overrideLibrary="com.example.jetpack_loading,rikka.shizuku.provider,rikka.shizuku.api,rikka.shizuku.shared,rikka.shizuku.aidl" />
+    <uses-sdk tools:overrideLibrary="
+        com.example.jetpack_loading,rikka.shizuku.provider,
+        rikka.shizuku.api,
+        rikka.shizuku.shared,
+        rikka.shizuku.aidl,
+        "
+        />
 
     <application
         android:allowBackup="true"
@@ -105,7 +111,6 @@
         <activity-alias
             android:name=".activities.LaunchDrawer"
             android:targetActivity="tk.zwander.widgetdrawer.activities.TriggerActivity"
-            android:launchMode="singleInstancePerTask"
             android:exported="true"
             android:label="@string/open_widget_drawer">
             <intent-filter>
@@ -235,7 +240,8 @@
         <service
             android:name="tk.zwander.lockscreenwidgets.services.Accessibility"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:exported="true">
+            android:exported="true"
+            tools:ignore="AccessibilityPolicy">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>

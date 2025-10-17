@@ -1,12 +1,11 @@
 package tk.zwander.common.util
 
-import android.app.ActivityOptions
 import android.app.Application
 import android.appwidget.AppWidgetProviderInfo
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.hardware.display.DisplayManagerGlobal
+import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -14,11 +13,9 @@ import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
-import android.view.Display
 import android.widget.AbsListView
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.core.app.ActivityOptionsCompat
 import androidx.core.net.toUri
 import com.google.gson.GsonBuilder
 import kotlinx.coroutines.CoroutineScope
@@ -65,24 +62,6 @@ fun Context.launchEmail(to: String, subject: String) {
     }
 }
 
-//Take an integer and make it even.
-//If the integer == 0, return itself (0).
-//If the integer is 1, return 2.
-//If the integer is -1, return -2.
-//If the integer is even, return itself.
-//If the integer is odd and negative, return itself - 1
-//If the integer is odd and positive, return itself + 1
-@Suppress("KotlinConstantConditions")
-fun Int.makeEven(): Int {
-    return when {
-        this == 0 -> 0
-        this == 1 -> 2
-        this == -1 -> -2
-        this % 2 == 0 -> this
-        else -> this + if (this < 0) -1 else 1
-    }
-}
-
 suspend inline fun <T> Collection<T>.forEachParallel(crossinline action: suspend CoroutineScope.(T) -> Unit) {
     coroutineScope {
         val awaits = ArrayList<Deferred<*>>(size)
@@ -109,24 +88,17 @@ suspend inline fun <T, S> Collection<T>.mapIndexedParallel(crossinline action: s
 val Context.safeApplicationContext: Context
     get() = this as? Application ?: applicationContext
 
+fun AppWidgetProviderInfo.loadPreviewOrIconDrawable(context: Context, density: Int = 0): Drawable? {
+    return (loadPreviewImage(context, density) ?: loadIcon(context, density))
+}
+
 fun AppWidgetProviderInfo.loadPreviewOrIcon(context: Context, density: Int = 0, maxSize: Dp = 128.dp): Bitmap? {
-    return (loadPreviewImage(context, density) ?: loadIcon(context, density))?.toSafeBitmap(context.density, maxSize = maxSize)
+    return loadPreviewOrIconDrawable(context, density)?.toSafeBitmap(context.density, maxSize = maxSize)
 }
 
 fun AppWidgetProviderInfo.createPersistablePreviewBitmap(context: Context): String? {
     return loadPreviewOrIcon(context, maxSize = 128.dp)?.toBase64()
 }
-
-val Context.defaultDisplayCompat: Display
-    get() {
-        val displayId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            displayNoVerify?.displayId ?: Display.DEFAULT_DISPLAY
-        } else {
-            Display.DEFAULT_DISPLAY
-        }
-
-        return DisplayManagerGlobal.getInstance().getRealDisplay(displayId)
-    }
 
 fun Context.vibrate(duration: Long = 50L) {
     val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -149,17 +121,6 @@ val AbsListView.verticalScrollOffset: Int
         return AbsListView::class.java.getDeclaredMethod("computeVerticalScrollOffset")
             .apply { isAccessible = true }
             .invoke(this) as Int
-    }
-
-val ActivityOptionsCompat.internalActivityOptions: ActivityOptions?
-    get() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            return null
-        }
-
-        return this::class.java.getDeclaredField("mActivityOptions")
-            .apply { isAccessible = true }
-            .get(this) as? ActivityOptions
     }
 
 fun Throwable.stringify(): String {

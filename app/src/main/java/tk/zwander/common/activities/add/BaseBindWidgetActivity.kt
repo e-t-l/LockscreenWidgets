@@ -8,9 +8,11 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
+import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Bundle
 import android.telephony.PhoneNumberUtils
+import android.view.Display
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.unit.dp
@@ -23,12 +25,14 @@ import tk.zwander.common.data.WidgetSizeData
 import tk.zwander.common.host.widgetHostCompat
 import tk.zwander.common.util.ConfigureLauncher
 import tk.zwander.common.util.FrameSizeAndPosition
+import tk.zwander.common.util.LSDisplay
 import tk.zwander.common.util.appWidgetManager
 import tk.zwander.common.util.componentNameCompat
 import tk.zwander.common.util.createPersistablePreviewBitmap
 import tk.zwander.common.util.density
 import tk.zwander.common.util.frameSizeAndPosition
 import tk.zwander.common.util.getRemoteDrawable
+import tk.zwander.common.util.hasConfiguration
 import tk.zwander.common.util.logUtils
 import tk.zwander.common.util.prefManager
 import tk.zwander.common.util.shortcutIdManager
@@ -52,21 +56,44 @@ abstract class BaseBindWidgetActivity : BaseActivity() {
         get() = currentWidgets.map { it.id }
     protected open val deleteOnConfigureError: Boolean = true
 
+    protected val displayManager by lazy { getSystemService(DISPLAY_SERVICE) as DisplayManager }
+    protected val display: LSDisplay by lazy {
+        LSDisplay(
+            display = displayManager.getDisplay(Display.DEFAULT_DISPLAY),
+            fontScale = resources.configuration.fontScale,
+        )
+    }
+
+    private var currentRequestId: Int? = null
+
     private val permRequest =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            val id = result.data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1)
-                ?: return@registerForActivityResult
+            try {
+                val id = result.data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, currentRequestId ?: -1) ?: currentRequestId
 
-            if (result.resultCode == RESULT_OK) {
-                //The user has granted permission for Lockscreen Widgets
-                //so retry binding the widget
-                tryBindWidget(
-                    appWidgetManager.getAppWidgetInfo(id)
-                )
-            } else {
-                //The user didn't allow Lockscreen Widgets to bind
-                //widgets, so delete the allocated ID
-                widgetHost.deleteAppWidgetId(id)
+                if (id == null || id == -1) {
+                    logUtils.debugLog("Unable to get widget ID.", null)
+                    return@registerForActivityResult
+                }
+
+                if (result.resultCode == RESULT_OK) {
+                    val widgetInfo = appWidgetManager.getAppWidgetInfo(id)
+
+                    if (widgetInfo == null) {
+                        logUtils.debugLog("Unable to get app widget info for ID $id", null)
+                        widgetHost.deleteAppWidgetId(id)
+                    } else {
+                        //The user has granted permission for Lockscreen Widgets
+                        //so retry binding the widget
+                        tryBindWidget(widgetInfo)
+                    }
+                } else {
+                    //The user didn't allow Lockscreen Widgets to bind
+                    //widgets, so delete the allocated ID
+                    widgetHost.deleteAppWidgetId(id)
+                }
+            } finally {
+                currentRequestId = null
             }
         }
 
@@ -243,7 +270,7 @@ abstract class BaseBindWidgetActivity : BaseActivity() {
         else {
             //Only launch the config Activity if the widget isn't already bound (avoid reconfiguring it
             //every time the app restarts)
-            if (info.configure != null && !currentIds.contains(id)) {
+            if (info.hasConfiguration(this) && !currentIds.contains(id)) {
                 configureWidget(id, info)
             } else {
                 addNewWidget(id, info)
@@ -292,10 +319,25 @@ abstract class BaseBindWidgetActivity : BaseActivity() {
             intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
             intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, provider)
 
+            currentRequestId = id
             permRequest.launch(intent)
         } catch (e: ActivityNotFoundException) {
             logUtils.normalLog("Unable to launch widget permission request", e)
             widgetHost.deleteAppWidgetId(id)
+            pendingErrors++
+
+            MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.error)
+                .setMessage(
+                    resources.getString(
+                        R.string.bind_widget_error,
+                        provider,
+                    ),
+                )
+                .setPositiveButton(android.R.string.ok) { _, _ ->
+                    pendingErrors--
+                }
+                .show()
         }
     }
 
@@ -314,8 +356,8 @@ abstract class BaseBindWidgetActivity : BaseActivity() {
                 .setMessage(
                     resources.getString(
                         R.string.configure_widget_error,
-                        provider
-                    )
+                        provider,
+                    ),
                 )
                 .setPositiveButton(android.R.string.ok) { _, _ ->
                     pendingErrors--
@@ -343,9 +385,15 @@ abstract class BaseBindWidgetActivity : BaseActivity() {
     protected open val rowCount: Int
         get() = FramePrefs.getRowCountForFrame(this, holderId)
     protected open val height: Float
-        get() = frameSizeAndPosition.getSizeForType(FrameSizeAndPosition.FrameType.LockNormal.Portrait).y
+        get() = frameSizeAndPosition.getSizeForType(
+            FrameSizeAndPosition.FrameType.LockNormal.Portrait,
+            display,
+        ).y
     protected open val width: Float
-        get() = frameSizeAndPosition.getSizeForType(FrameSizeAndPosition.FrameType.LockNormal.Portrait).y
+        get() = frameSizeAndPosition.getSizeForType(
+            FrameSizeAndPosition.FrameType.LockNormal.Portrait,
+            display,
+        ).y
 
     protected open fun calculateInitialWidgetColSpan(provider: AppWidgetProviderInfo): Int {
         val widthRatio = provider.minWidth.toFloat() / width

@@ -15,7 +15,6 @@ import android.os.Looper
 import android.os.Parcel
 import android.os.SystemProperties
 import android.provider.Settings
-import android.service.notification.INotificationListener
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import com.bugsnag.android.BreadcrumbType
@@ -27,12 +26,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import net.bytebuddy.ByteBuddy
-import net.bytebuddy.dynamic.loading.ClassLoadingStrategy
-import net.bytebuddy.implementation.MethodDelegation
 import tk.zwander.common.util.Event
 import tk.zwander.common.util.EventObserver
 import tk.zwander.common.util.eventManager
+import tk.zwander.common.util.globalState
 import tk.zwander.common.util.logUtils
 import tk.zwander.common.util.stringify
 
@@ -80,33 +77,6 @@ class NotificationListener : NotificationListenerService(), EventObserver, Corou
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             mWrapper = NougatListenerWrapper()
-        } else {
-            try {
-                val wrapperClass = Class.forName("android.service.notification.NotificationListenerService\$INotificationListenerWrapper")
-                NotificationListenerService::class.java.getDeclaredField("mWrapper")
-                    .apply {
-                        isAccessible = true
-                        val original = get(this@NotificationListener)
-
-                        set(
-                            this@NotificationListener,
-                            ByteBuddy()
-                                .subclass(wrapperClass)
-                                .name("android.service.notification.WrappingNotificationListener")
-                                .defineMethod("onTransact", Boolean::class.java)
-                                .withParameters(Int::class.java, Parcel::class.java, Parcel::class.java, Int::class.java)
-                                .intercept(MethodDelegation.to(LollipopListenerWrapper(original as INotificationListener.Stub)))
-                                .make()
-                                .load(NotificationListenerService::class.java.classLoader, ClassLoadingStrategy.Default.CHILD_FIRST)
-                                .loaded
-                                .getDeclaredConstructor()
-                                .apply { isAccessible = true }
-                                .newInstance(),
-                        )
-                    }
-            } catch (e: Throwable) {
-                Bugsnag.notify(IllegalStateException("Error creating Lollipop notification listener", e))
-            }
         }
 
         return NotificationListenerService::class.java.getDeclaredField("mWrapper")
@@ -123,7 +93,10 @@ class NotificationListener : NotificationListenerService(), EventObserver, Corou
         when (event) {
             Event.RequestNotificationCount -> {
                 if (isListening.value) {
-                    logUtils.debugLog("Sending notification update because update was requested.", null)
+                    logUtils.debugLog(
+                        "Sending notification update because update was requested.",
+                        null
+                    )
                     handler.post {
                         sendUpdate()
                     }
@@ -166,9 +139,8 @@ class NotificationListener : NotificationListenerService(), EventObserver, Corou
                         activeNotifications
                     } ?: arrayOf()
                     logUtils.debugLog("Filtering notifications ${activeNotifications.size}", null)
-                    eventManager.sendEvent(
-                        Event.NewNotificationCount(activeNotifications.count { it.shouldCount }),
-                    )
+                    globalState.notificationCount.value =
+                        activeNotifications.count { it.shouldCount }
                 } catch (e: BadParcelableException) {
                     logUtils.normalLog("Error sending notification count update", e)
 
@@ -179,7 +151,11 @@ class NotificationListener : NotificationListenerService(), EventObserver, Corou
                     logUtils.normalLog("Error sending notification count update", e)
                 } catch (e: Throwable) {
                     logUtils.normalLog("Error sending notification count update", e)
-                    Bugsnag.leaveBreadcrumb("Error sending notification count update", mapOf("error" to e.stringify()), BreadcrumbType.ERROR)
+                    Bugsnag.leaveBreadcrumb(
+                        "Error sending notification count update",
+                        mapOf("error" to e.stringify()),
+                        BreadcrumbType.ERROR
+                    )
                 }
             }
         }
@@ -222,15 +198,22 @@ class NotificationListener : NotificationListenerService(), EventObserver, Corou
                         return false
                     }
 
-                    val shouldCheckHideSilentStatusBarIcons = importance <= NotificationManager.IMPORTANCE_LOW &&
-                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                    val shouldCheckHideSilentStatusBarIcons =
+                        importance <= NotificationManager.IMPORTANCE_LOW &&
+                                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
 
                     if (shouldCheckHideSilentStatusBarIcons) {
-                        logUtils.debugLog("Checking shouldHideSilentStatusBarIcons with context package name $opPackageName", null)
+                        logUtils.debugLog(
+                            "Checking shouldHideSilentStatusBarIcons with context package name $opPackageName",
+                            null
+                        )
                     }
 
                     if (shouldCheckHideSilentStatusBarIcons && nm.shouldHideSilentStatusBarIcons()) {
-                        logUtils.debugLog("Low importance and silent hidden ${this.notification.channelId}", null)
+                        logUtils.debugLog(
+                            "Low importance and silent hidden ${this.notification.channelId}",
+                            null
+                        )
                         return false
                     }
 
@@ -241,7 +224,10 @@ class NotificationListener : NotificationListenerService(), EventObserver, Corou
                         SystemProperties.get("ro.vendor.camera.extensions.service")
                             .contains("com.google.android.apps.camera.services.extensions.service.PixelExtensions")
                     ) {
-                        logUtils.debugLog("Pixel workaround on ${this.packageName} ${this.notification.channelId}", null)
+                        logUtils.debugLog(
+                            "Pixel workaround on ${this.packageName} ${this.notification.channelId}",
+                            null
+                        )
                         return false
                     }
                 }
@@ -261,19 +247,11 @@ class NotificationListener : NotificationListenerService(), EventObserver, Corou
             return try {
                 super.onTransact(code, data, reply, flags)
             } catch (e: Throwable) {
-                Bugsnag.leaveBreadcrumb("Unable to receive notification update", mapOf("error" to e.stringify()), BreadcrumbType.ERROR)
-                false
-            }
-        }
-    }
-
-    // Public to allow ByteBuddy wrapping
-    inner class LollipopListenerWrapper(private val wrapper: INotificationListener.Stub) {
-        fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
-            return try {
-                wrapper.onTransact(code, data, reply, flags)
-            } catch (e: Throwable) {
-                Bugsnag.leaveBreadcrumb("Unable to receive notification update", mapOf("error" to e.stringify()), BreadcrumbType.ERROR)
+                Bugsnag.leaveBreadcrumb(
+                    "Unable to receive notification update",
+                    mapOf("error" to e.stringify()),
+                    BreadcrumbType.ERROR
+                )
                 false
             }
         }

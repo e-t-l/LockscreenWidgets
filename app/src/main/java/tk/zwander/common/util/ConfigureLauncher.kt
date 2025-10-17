@@ -42,9 +42,9 @@ class ConfigureLauncher(
     fun launch(id: Int): Boolean {
         try {
             val samsungConfigComponent = activity.appWidgetManager.getAppWidgetInfo(id)
-                .getSamsungConfigureComponent(activity)
+                ?.getSamsungConfigureComponent(activity)
 
-            activity.logUtils.debugLog("Found Samsung config component $samsungConfigComponent.")
+            activity.logUtils.debugLog("Found Samsung config component $samsungConfigComponent for $id.")
 
             if (samsungConfigComponent != null) {
                 val launchIntent = Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE)
@@ -71,15 +71,16 @@ class ConfigureLauncher(
                 configLauncher.launch(
                     IntentSenderRequest.Builder(intentSender)
                         .build(),
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                        ActivityOptionsCompat.makeBasic()
-                            .apply {
-                                internalActivityOptions?.setPendingIntentBackgroundActivityStartMode(
-                                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
-                                )
-                            }
-                    } else {
-                        null
+                    ActivityOptionsCompat.makeBasic().apply {
+                        @SuppressLint("WrongConstant")
+                        setPendingIntentBackgroundActivityStartMode(
+                            if (Build.VERSION.SDK_INT > Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS
+                            } else {
+                                @Suppress("DEPRECATION")
+                                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                            },
+                        )
                     },
                 )
                 currentConfigId = id
@@ -97,7 +98,7 @@ class ConfigureLauncher(
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                     ActivityOptions
                         .makeBasic()
-                        .setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+                        .setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS)
                         .toBundle()
                 } else null,
             )
@@ -116,22 +117,57 @@ class ConfigureLauncher(
 
             activity.logUtils.debugLog("Configure complete for id $id $currentConfigId", null)
 
-            if (resultCode == RESULT_OK && id != null && id != -1) {
-                activity.logUtils.debugLog("Successfully configured widget.", null)
+            if (id != null && id != -1) {
+                val widgetInfo: AppWidgetProviderInfo? = activity.appWidgetManager.getAppWidgetInfo(id)
+                var resultOk = resultCode == RESULT_OK
 
-                val widgetInfo = activity.appWidgetManager.getAppWidgetInfo(id)
+                if (widgetInfo?.configure != null) {
+                    val matchedComponents = activity.packageManager.queryIntentActivities(
+                        Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE).apply {
+                            addCategory(Intent.CATEGORY_DEFAULT)
+                        },
+                        0,
+                    ) + activity.packageManager.queryIntentActivities(
+                        Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE),
+                        0,
+                    )
 
-                if (widgetInfo == null) {
-                    activity.logUtils.debugLog("Unable to get widget info for $id, not adding", null)
-                    finishIfNoErrors()
-                    return
+                    if (matchedComponents.isEmpty() || !matchedComponents.any { it.activityInfo.componentNameCompat == widgetInfo.configure }) {
+                        activity.logUtils.debugLog("Found a widget configuration that probably wasn't expecting to be launched here. Assuming a canceled result should still continue. ${widgetInfo.provider}, ${widgetInfo.configure}", null)
+                        resultOk = true
+                    }
+                } else if (widgetInfo != null) {
+                    activity.logUtils.debugLog("Found a widget configuration that no longer exists? ${widgetInfo.provider}", null)
+                    resultOk = true
                 }
 
-                currentConfigId = null
+                if (resultOk) {
+                    activity.logUtils.debugLog("Successfully configured widget.", null)
 
-                addNewWidget(id, widgetInfo)
+                    if (widgetInfo == null) {
+                        activity.logUtils.debugLog(
+                            "Unable to get widget info for $id, not adding",
+                            null
+                        )
+                        finishIfNoErrors()
+                        return
+                    }
+
+                    currentConfigId = null
+
+                    addNewWidget(id, widgetInfo)
+                } else {
+                    activity.logUtils.debugLog(
+                        "Failed to configure widget. Result code $resultCode, id $id.",
+                        null
+                    )
+                    finishIfNoErrors()
+                }
             } else {
-                activity.logUtils.debugLog("Failed to configure widget. Result code $resultCode, id $id.", null)
+                activity.logUtils.debugLog(
+                    "Failed to configure widget. Result code $resultCode, id $id.",
+                    null
+                )
                 finishIfNoErrors()
             }
         }

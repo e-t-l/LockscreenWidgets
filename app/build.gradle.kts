@@ -1,3 +1,6 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.UUID
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -8,17 +11,18 @@ plugins {
 }
 
 android {
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         namespace = "tk.zwander.lockscreenwidgets"
         applicationId = "tk.zwander.lockscreenwidgets"
-        minSdk = 22
-        targetSdk = 35
-        versionCode = 142
-        versionName = "2.22.5"
+        minSdk = 23
+        targetSdk = 36
+        versionCode = 145
+        versionName = "2.23.0"
 
         extensions.getByType(BasePluginExtension::class.java).archivesName.set("LockscreenWidgets_${versionName}")
+        manifestPlaceholders["build_uuid"] = UUID.nameUUIDFromBytes("InstallWithOptions_${versionCode}".toByteArray()).toString()
 
         @Suppress("UnstableApiUsage")
         externalNativeBuild {
@@ -50,9 +54,11 @@ android {
         targetCompatibility = JavaVersion.toVersion(jdkVersion)
     }
 
-    kotlinOptions {
-        jvmTarget = jdkVersion
-        freeCompilerArgs += "-Xcontext-receivers"
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.fromTarget(jdkVersion))
+            freeCompilerArgs.add("-Xcontext-receivers")
+        }
     }
 
     packaging {
@@ -65,6 +71,15 @@ android {
             version = "3.22.1"
         }
     }
+
+    ndkVersion = "28.1.13356709"
+
+    dependenciesInfo {
+        // Disables dependency metadata when building APKs (for IzzyOnDroid/F-Droid)
+        includeInApk = false
+        // Disables dependency metadata when building Android App Bundles (for Google Play)
+        includeInBundle = false
+    }
 }
 
 dependencies {
@@ -73,6 +88,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.atomicfu)
+    implementation(kotlin("reflect"))
 
     implementation(libs.core.ktx)
     implementation(libs.core.remoteviews)
@@ -97,6 +113,7 @@ dependencies {
     implementation(libs.compose.foundation)
     implementation(libs.compose.ui.tooling)
     implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons.core)
     implementation(libs.lifecycle.viewmodel.compose)
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.lifecycle.runtime.ktx)
@@ -120,4 +137,6 @@ dependencies {
     implementation(libs.storage)
 
     implementation(libs.colorpicker.compose)
+
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
 }

@@ -33,7 +33,7 @@
     <string name="reset">Reset</string>
     <string name="increase">Increase</string>
     <string name="decrease">Decrease</string>
-    <string name="selected" tools:override="true">Selected</string>
+    <string name="selected" tools:override="true">Vybráno</string>
     <string name="drawer_enabled">Nabídka povolena</string>
     <string name="frame_enabled">Rámeček povolen</string>
     <string name="add_id_hint">com.android.systemui:id/some_id_here</string>
@@ -71,7 +71,7 @@
     <string name="main_screen_social_patreon_desc">Za $1 každý měsíc získáte přístup ke všem mým placeným aplikacím a k některým exkluzivním věcem.</string>
     <string name="main_screen_accessibility_not_started">Služba Dostupnost není spuštěna. Může to být proto, že musíte povolit seznam widgetů na zamykací obrazovce podle optimalizace baterie na vašem telefonu, nebo je budete muset vypnout a znovu zapnout v Nastavení.</string>
     <string name="intro_privacy_policy_desc">Widgety na zamykací obrazovce nezískávají žádná data nad rámec toho, co je potřeba pro analýzu chyb. Další informace níže.</string>
-    <string name="main_screen_privacy_policy_desc">Lockscreen Widgets doesn\'t collect any data beyond what\'s needed for crash analysis. Tap here to learn more.</string>
+    <string name="main_screen_privacy_policy_desc">Lockscreen Widgets neshromažďuje žádná data kromě těch, která jsou nezbytná pro analýzu pádů. Klepnutím sem se dozvíte více.</string>
     <string name="settings_screen_hide_when_notifications_shown">Hide when Showing Notifications</string>
     <string name="settings_screen_hide_when_notifications_shown_desc">Hide the widget frame while there are notifications being shown. This requires the use of a Notification Listener Service. You don\'t have to grant this permission right now.</string>
     <string name="settings_screen_page_indicator_behavior">Page Indicator Behavior</string>
@@ -258,6 +258,7 @@
     <string name="blank_widget">Blank Widget</string>
     <string name="add_frame">Add Widget Frame</string>
     <string name="remove_frame">Remove Widget Frame</string>
+    <string name="unable_to_open_settings">Unable to open Settings.</string>
     <string name="remove_frame_confirmation_message">Are you sure you want to remove this frame?</string>
     <string name="select">Select</string>
     <string name="cancel">Cancel</string>
@@ -272,4 +273,7 @@
         <item quantity="other">%s frames added</item>
     </plurals>
     <string name="frame_management">Frame Management</string>
+    <string name="unable_to_grant_storage">Unable to Grant Storage Permission!</string>
+    <string name="unable_to_grant_storage_desc">It looks like you\'re using a device that restricts ADB\'s ability to grant permissions. The setting to allow this should be in Developer Options and called something similar to \"Disable Permission Monitoring\", \"USB Debugging (Security Setting)\", or \"Disable Permission Monitoring\". Once you\'ve toggled that option, come back here to try again.</string>
+    <string name="developer_options">Developer Options</string>
 </resources>

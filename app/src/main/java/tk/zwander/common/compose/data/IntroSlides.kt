@@ -1,5 +1,6 @@
 package tk.zwander.common.compose.data
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.database.ContentObserver
 import android.net.Uri
@@ -8,7 +9,6 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -30,6 +30,7 @@ import dev.zwander.composeintroslider.SimpleIntroPage
 import kotlinx.coroutines.launch
 import tk.zwander.common.activities.OnboardingActivity
 import tk.zwander.common.compose.AppTheme
+import tk.zwander.common.compose.components.ContentColoredOutlinedButton
 import tk.zwander.common.util.LifecycleEffect
 import tk.zwander.common.util.canReadWallpaper
 import tk.zwander.common.util.isAccessibilityEnabled
@@ -47,6 +48,7 @@ fun rememberIntroSlides(
     finish: () -> Unit,
 ): List<IntroPage> {
     val context = LocalContext.current
+
     val slides = remember(startReason) {
         mutableStateListOf<IntroPage>()
     }
@@ -146,7 +148,7 @@ fun rememberIntroSlides(
                 contentColor = { colorResource(id = R.color.slide_3_text) },
                 icon = { painterResource(id = R.drawable.info) },
                 extraContent = {
-                    OutlinedButton(
+                    ContentColoredOutlinedButton(
                         onClick = {
                             context.launchUrl("https://github.com/zacharee/LockscreenWidgets/blob/master/PRIVACY.md")
                         }
@@ -171,7 +173,7 @@ fun rememberIntroSlides(
                         mutableStateOf(false)
                     }
 
-                    OutlinedButton(
+                    ContentColoredOutlinedButton(
                         onClick = { showingDialog = true },
                         enabled = !hasAccessibility,
                     ) {
@@ -219,7 +221,7 @@ fun rememberIntroSlides(
                 contentColor = { colorResource(id = R.color.slide_5_text) },
                 icon = { painterResource(id = R.drawable.ic_baseline_notifications_active_24) },
                 extraContent = {
-                    OutlinedButton(
+                    ContentColoredOutlinedButton(
                         onClick = {
                             val notifIntent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
                             context.startActivity(notifIntent)
@@ -233,8 +235,7 @@ fun rememberIntroSlides(
             ))
         }
 
-        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.LOLLIPOP_MR1 &&
-            (startReason == OnboardingActivity.RetroMode.NONE || startReason == OnboardingActivity.RetroMode.STORAGE)) {
+        if (startReason == OnboardingActivity.RetroMode.NONE || startReason == OnboardingActivity.RetroMode.STORAGE) {
             slides.add(SimpleIntroPage(
                 title = { stringResource(id = R.string.intro_read_storage_title) },
                 description = {
@@ -253,13 +254,21 @@ fun rememberIntroSlides(
                     val shizukuInstalled by ShizukuManager.rememberShizukuInstallStateAsState()
                     val shizukuRunning by ShizukuManager.rememberShizukuRunningStateAsState()
 
-                    OutlinedButton(
+                    var showingGrantFailureDialog by remember {
+                        mutableStateOf(false)
+                    }
+
+                    ContentColoredOutlinedButton(
                         onClick = {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                 if (shizukuRunning) {
                                     scope.launch {
                                         context.shizukuManager.runShizukuCommand {
-                                            grantReadExternalStorage()
+                                            try {
+                                                grantReadExternalStorage()
+                                            } catch (_: SecurityException) {
+                                                showingGrantFailureDialog = true
+                                            }
                                             canReadWallpaper = context.canReadWallpaper
                                         }
                                     }
@@ -299,12 +308,44 @@ fun rememberIntroSlides(
                         )
                     }
 
-                    OutlinedButton(
+                    ContentColoredOutlinedButton(
                         onClick = {
                             context.launchUrl("https://github.com/zacharee/LockscreenWidgets/blob/master/PRIVACY.md")
                         }
                     ) {
                         Text(text = stringResource(id = R.string.privacy_policy))
+                    }
+
+                    if (showingGrantFailureDialog) {
+                        AlertDialog(
+                            onDismissRequest = { showingGrantFailureDialog = false },
+                            title = { Text(text = stringResource(R.string.unable_to_grant_storage)) },
+                            text = { Text(text = stringResource(R.string.unable_to_grant_storage_desc)) },
+                            confirmButton = {
+                                AppTheme {
+                                    if (Settings.Global.getInt(context.contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 1) {
+                                        TextButton(
+                                            onClick = {
+                                                showingGrantFailureDialog = false
+                                                try {
+                                                    context.startActivity(
+                                                        Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS),
+                                                    )
+                                                } catch (_: ActivityNotFoundException) {}
+                                            },
+                                        ) {
+                                            Text(text = stringResource(R.string.developer_options))
+                                        }
+                                    }
+
+                                    TextButton(
+                                        onClick = { showingGrantFailureDialog = false },
+                                    ) {
+                                        Text(text = stringResource(android.R.string.ok))
+                                    }
+                                }
+                            },
+                        )
                     }
                 },
                 canMoveForward = { startReason != OnboardingActivity.RetroMode.STORAGE || canReadWallpaper || BuildConfig.DEBUG },
@@ -321,7 +362,7 @@ fun rememberIntroSlides(
                 contentColor = { colorResource(id = R.color.slide_7_text) },
                 icon = { painterResource(id = R.drawable.ic_baseline_battery_alert_24) },
                 extraContent = {
-                    OutlinedButton(
+                    ContentColoredOutlinedButton(
                         onClick = {
                             context.launchUrl("https://dontkillmyapp.com/?app=Lockscreen%20Widgets")
                         }

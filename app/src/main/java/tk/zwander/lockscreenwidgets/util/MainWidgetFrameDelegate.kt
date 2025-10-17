@@ -9,8 +9,6 @@ import android.graphics.Point
 import android.graphics.PointF
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
-import android.graphics.drawable.GradientDrawable
-import android.hardware.display.DisplayManager.DisplayListener
 import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -26,12 +24,12 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.contentColorFor
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.component1
@@ -39,29 +37,30 @@ import androidx.core.graphics.component2
 import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
 import androidx.recyclerview.widget.RecyclerView
-import com.android.internal.R.attr.screenOrientation
 import com.bugsnag.android.performance.compose.MeasuredComposable
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import tk.zwander.common.activities.DismissOrUnlockActivity
 import tk.zwander.common.compose.AppTheme
+import tk.zwander.common.compose.components.BlurView
+import tk.zwander.common.compose.components.ContentColoredOutlinedButton
 import tk.zwander.common.data.WidgetData
 import tk.zwander.common.util.BaseDelegate
-import tk.zwander.common.util.BlurManager
 import tk.zwander.common.util.Event
 import tk.zwander.common.util.FrameSizeAndPosition
+import tk.zwander.common.util.GlobalState
 import tk.zwander.common.util.HandlerRegistry
 import tk.zwander.common.util.ISnappyLayoutManager
 import tk.zwander.common.util.PrefManager
-import tk.zwander.common.util.dpAsPx
 import tk.zwander.common.util.eventManager
 import tk.zwander.common.util.frameSizeAndPosition
+import tk.zwander.common.util.globalState
 import tk.zwander.common.util.handler
 import tk.zwander.common.util.logUtils
 import tk.zwander.common.util.mainHandler
 import tk.zwander.common.util.prefManager
-import tk.zwander.common.util.pxAsDp
-import tk.zwander.common.util.screenSize
 import tk.zwander.common.util.wallpaperUtils
 import tk.zwander.lockscreenwidgets.R
 import tk.zwander.lockscreenwidgets.adapters.WidgetFrameAdapter
@@ -75,7 +74,12 @@ import kotlin.math.floor
 /**
  * Handle most of the logic involving the widget frame.
  */
-open class MainWidgetFrameDelegate protected constructor(context: Context, protected val id: Int = -1) : BaseDelegate<MainWidgetFrameDelegate.State>(context) {
+open class MainWidgetFrameDelegate protected constructor(
+    context: Context,
+    protected val id: Int = -1,
+    wm: WindowManager,
+    displayId: Int,
+) : BaseDelegate<MainWidgetFrameDelegate.State>(context, wm, displayId) {
     companion object {
         private val instance = MutableStateFlow<MainWidgetFrameDelegate?>(null)
 
@@ -89,16 +93,16 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
                 return null
             }
 
-            return getInstance(context)
+            return instance.value
         }
 
         @Synchronized
-        fun getInstance(context: Context): MainWidgetFrameDelegate {
+        fun getInstance(context: Context, wm: WindowManager, displayId: Int): MainWidgetFrameDelegate {
             return instance.value ?: run {
                 if (context !is Accessibility) {
                     throw IllegalStateException("Delegate can only be initialized by Accessibility Service!")
                 } else {
-                    MainWidgetFrameDelegate(context).also {
+                    MainWidgetFrameDelegate(context, wm = wm, displayId = displayId).also {
                         instance.value = it
                     }
                 }
@@ -112,39 +116,20 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
     }
 
     override var commonState: BaseState = BaseState()
-        set(newCommonState) {
-            val oldState = field
-            field = newCommonState
-
-            var newFrameState = state
-
-            if (newCommonState.screenOrientation != oldState.screenOrientation) {
-                newFrameState =
-                    newFrameState.copy(isPendingOrientationStateChange = true, isPreview = false)
-            }
-
-            if (newCommonState.isScreenOn != oldState.isScreenOn && !newCommonState.isScreenOn) {
-                newFrameState =
-                    newFrameState.copy(isPreview = false, notificationsPanelFullyExpanded = false)
-            }
-
-            state = newFrameState
-        }
 
     override var state: State = State()
         set(newState) {
             var actualNewState = newState
             val oldState = field
 
-            // Extra state checks //
-            if (actualNewState.notificationsPanelFullyExpanded != oldState.notificationsPanelFullyExpanded) {
-                actualNewState =
-                    actualNewState.copy(isPendingNotificationStateChange = true, isPreview = false)
-            }
-
             if (actualNewState.isTempHide != oldState.isTempHide && actualNewState.isTempHide) {
                 actualNewState = actualNewState.copy(isPreview = false)
             }
+
+            if (actualNewState.screenOrientation != oldState.screenOrientation) {
+                actualNewState = actualNewState.copy(isPendingOrientationStateChange = true, isPreview = false)
+            }
+
             // ------------ //
 
             field = actualNewState
@@ -179,12 +164,12 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
     private val saveMode: FrameSizeAndPosition.FrameType
         get() {
             val isLandscape = prefManager.separateFrameLayoutForLandscape &&
-                    (commonState.screenOrientation == Surface.ROTATION_90 ||
-                        commonState.screenOrientation == Surface.ROTATION_270)
+                    (state.screenOrientation == Surface.ROTATION_90 ||
+                        state.screenOrientation == Surface.ROTATION_270)
 
             return when {
                 id != -1 -> FrameSizeAndPosition.FrameType.SecondaryLockscreen.select(!isLandscape, id)
-                state.notificationsPanelFullyExpanded && framePrefs.showInNotificationShade -> {
+                globalState.notificationsPanelFullyExpanded.value && framePrefs.showInNotificationShade -> {
                     if (kgm.isKeyguardLocked && framePrefs.separateLockNCPosition) {
                         FrameSizeAndPosition.FrameType.LockNotification.select(!isLandscape)
                     } else {
@@ -196,30 +181,34 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
         }
 
     //The size, position, and such of the widget frame on the lock screen.
-    final override val params = WindowManager.LayoutParams().apply {
-        type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+    final override val params by lazy {
+        WindowManager.LayoutParams().apply {
+            type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
 
-        frameSizeAndPosition.getSizeForType(saveMode).let { size ->
-            width = dpAsPx(size.x)
-            height = dpAsPx(size.y)
+            frameSizeAndPosition.getSizeForType(saveMode, display).let { size ->
+                width = display.dpToPx(size.x)
+                height = display.dpToPx(size.y)
+            }
+            frameSizeAndPosition.getPositionForType(saveMode, display).let { pos ->
+                x = pos.x
+                y = pos.y
+            }
+
+            gravity = Gravity.CENTER
+
+            flags =
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            format = PixelFormat.RGBA_8888
         }
-        frameSizeAndPosition.getPositionForType(saveMode).let { pos ->
-            x = pos.x
-            y = pos.y
-        }
-
-        gravity = Gravity.CENTER
-
-        flags =
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-        format = PixelFormat.RGBA_8888
     }
     override val rootView: View
         get() = binding.root
     override val recyclerView: RecyclerView
         get() = binding.widgetsPager
+    override val removeConfirmationView: ComposeView
+        get() = binding.removeView
     override var currentWidgets: List<WidgetData>
         get() = FramePrefs.getWidgetsForFrame(this, id).toList()
         set(value) {
@@ -237,8 +226,9 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
             context = context,
             rootView = rootView,
             onRemoveCallback = { item, _ ->
-                binding.removeWidgetConfirmation.root.show(item)
+                itemToRemove = item
             },
+            displayId = displayId,
             saveTypeGetter = { saveMode },
         )
     }
@@ -314,35 +304,8 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
         get() = !state.isPreview &&
                 state.selectionPreviewRequestCode == null &&
                 framePrefs.maskedMode &&
-                (!state.notificationsPanelFullyExpanded || !framePrefs.showInNotificationShade) &&
-                (!state.showingNotificationsPanel || framePrefs.hideOnNotificationShade)
-
-    override val blurManager by lazy {
-        BlurManager(
-            context = this,
-            params = params,
-            targetView = binding.blurBackground,
-            listenKeys = listOf(
-                framePrefs.keyFor(PrefManager.KEY_BLUR_BACKGROUND),
-                framePrefs.keyFor(PrefManager.KEY_BLUR_BACKGROUND_AMOUNT),
-            ),
-            shouldBlur = { framePrefs.blurBackground && !showWallpaperLayerCondition },
-            blurAmount = { framePrefs.blurBackgroundAmount },
-            cornerRadius = { dpAsPx(prefManager.cornerRadiusDp).toFloat() },
-            updateWindow = { binding.frame.updateWindow(wm, params) },
-            windowManager = wm,
-        )
-    }
-
-    private val displayListener = object : DisplayListener {
-        override fun onDisplayAdded(displayId: Int) {}
-        override fun onDisplayRemoved(displayId: Int) {}
-
-        override fun onDisplayChanged(displayId: Int) {
-            logUtils.normalLog("Display $displayId changed", null)
-            updateParamsIfNeeded()
-        }
-    }
+                (!globalState.notificationsPanelFullyExpanded.value || !framePrefs.showInNotificationShade) &&
+                (!globalState.showingNotificationsPanel.value || framePrefs.hideOnNotificationShade)
 
     override fun onEvent(event: Event) {
         super.onEvent(event)
@@ -368,10 +331,10 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
                         saveMode,
                         Point(
                             0,
-                            frameSizeAndPosition.getPositionForType(saveMode).y
+                            frameSizeAndPosition.getPositionForType(saveMode, display).y
                         )
                     )
-                    updateParamsIfNeeded()
+                    updateWindow()
                 }
             }
             is Event.CenterFrameVertically -> {
@@ -379,11 +342,11 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
                     frameSizeAndPosition.setPositionForType(
                         saveMode,
                         Point(
-                            frameSizeAndPosition.getPositionForType(saveMode).x,
+                            frameSizeAndPosition.getPositionForType(saveMode, display).x,
                             0
                         )
                     )
-                    updateParamsIfNeeded()
+                    updateWindow()
                 }
             }
             is Event.FrameResized -> {
@@ -415,7 +378,7 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
                     )
                     frameSizeAndPosition.setSizeForType(
                         saveMode,
-                        PointF(pxAsDp(params.width), pxAsDp(params.height))
+                        PointF(display.pxToDp(params.width), display.pxToDp(params.height))
                     )
 
                     if (event.isUp) {
@@ -431,6 +394,9 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
                 if (event.frameId == id) {
                     try {
                         if (event.attached) {
+                            if (lifecycleRegistry.currentState < Lifecycle.State.CREATED) {
+                                lifecycleRegistry.currentState = Lifecycle.State.CREATED
+                            }
                             lifecycleRegistry.currentState = Lifecycle.State.RESUMED
                             widgetHost.startListening(this)
                             updateWallpaperLayerIfNeeded()
@@ -472,14 +438,6 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
                     forceWakelock(wm, event.down)
                 }
             }
-            is Event.NewNotificationCount -> {
-                //Receive updates from our notification listener service on how many
-                //notifications are currently shown to the user. This count excludes
-                //notifications not visible on the lock screen.
-                //If the notification count is > 0, and the user has the option enabled,
-                //make sure to hide the widget frame.
-                updateStateAndWindowState(wm, transform = { it.copy(notificationCount = event.count) })
-            }
             Event.ScreenOff -> {
                 //If the device has some sort of AOD or ambient display, by the time we receive
                 //an accessibility event and see that the display is off, it's usually too late
@@ -494,15 +452,7 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
                             isTempHide = false,
                         )
                     },
-                    commonTransform = {
-                        it.copy(
-                            isScreenOn = false,
-                        )
-                    },
                 )
-            }
-            Event.ScreenOn -> {
-                updateStateAndWindowState(wm) { it.copy(isScreenOn = true) }
             }
             is Event.PreviewFrames -> {
                 if (prefManager.currentSecondaryFrames.isEmpty() && event.show == Event.PreviewFrames.ShowMode.SHOW_FOR_SELECTION) {
@@ -537,7 +487,11 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
             if (trigger && prefManager.requestUnlock && prefManager.frameDirectlyCheckForActivity) {
                 DismissOrUnlockActivity.launch(this)
             } else {
-                updateCommonState { it.copy(handlingClick = prefManager.requestUnlock) }
+                if (prefManager.requestUnlock) {
+                    globalState.handlingClick.value = globalState.handlingClick.value.toMutableMap().also {
+                        it[id] = Unit
+                    }
+                }
             }
         }
 
@@ -572,7 +526,7 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
-                                    OutlinedButton(
+                                    ContentColoredOutlinedButton(
                                         onClick = {
                                             eventManager.sendEvent(Event.FrameSelected(null, state.selectionPreviewRequestCode))
                                         },
@@ -580,7 +534,7 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
                                         Text(text = stringResource(R.string.cancel))
                                     }
 
-                                    OutlinedButton(
+                                    ContentColoredOutlinedButton(
                                         onClick = { eventManager.sendEvent(Event.FrameSelected(id, state.selectionPreviewRequestCode)) },
                                     ) {
                                         Text(text = stringResource(R.string.select))
@@ -592,6 +546,19 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
                 }
             }
         }
+        binding.blurBackground.setContent {
+            BlurView(
+                modifier = Modifier.fillMaxSize(),
+                blurKey = framePrefs.keyFor(PrefManager.KEY_BLUR_BACKGROUND),
+                blurAmountKey = framePrefs.keyFor(PrefManager.KEY_BLUR_BACKGROUND_AMOUNT),
+                params = params,
+                updateWindow = {
+                    updateOverlay()
+                },
+                cornerRadiusKey = PrefManager.KEY_FRAME_CORNER_RADIUS,
+                wm = wm,
+            )
+        }
 
         //Scroll to the stored page, making sure to catch a potential
         //out-of-bounds error.
@@ -599,7 +566,33 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
             scrollToStoredPosition(false)
         } catch (_: Exception) {}
 
-        displayManager.registerDisplayListener(displayListener, null)
+        scope.launch(Dispatchers.Main) {
+            globalState.isScreenOn.collect { isScreenOn ->
+                if (!isScreenOn) {
+                    globalState.notificationsPanelFullyExpanded.value = false
+                    updateState { it.copy(isPreview = false, isTempHide = false) }
+                }
+
+                updateWindowState(wm)
+            }
+        }
+
+        scope.launch(Dispatchers.Main) {
+            globalState.notificationsPanelFullyExpanded.collect { notificationsPanelFullyExpanded ->
+                updateState { it.copy(isPendingNotificationStateChange = true, isPreview = false) }
+            }
+        }
+
+        scope.launch(Dispatchers.Main) {
+            globalState.notificationCount.collect { notificationCount ->
+                //Receive updates from our notification listener service on how many
+                //notifications are currently shown to the user. This count excludes
+                //notifications not visible on the lock screen.
+                //If the notification count is > 0, and the user has the option enabled,
+                //make sure to hide the widget frame.
+                updateWindowState(wm)
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -611,8 +604,6 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
         if (id == -1) {
             invalidateInstance()
         }
-
-        displayManager.unregisterDisplayListener(displayListener)
     }
 
     override fun isLocked(): Boolean {
@@ -651,7 +642,7 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
         logUtils.debugLog("Adding overlay")
 
         if (!binding.frame.isAttachedToWindow) {
-            updateParamsIfNeeded()
+            updateWindow()
         }
         binding.frame.addWindow(wm, params)
     }
@@ -663,7 +654,9 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
 
         adapter.currentEditingInterfacePosition = -1
 
-        updateCommonState { it.copy(handlingClick = false) }
+        globalState.handlingClick.value = globalState.handlingClick.value.toMutableMap().also {
+            it.remove(id)
+        }
         forceWakelock(wm, false)
         binding.frame.removeWindow(wm)
     }
@@ -672,7 +665,7 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
         binding.frame.setNewDebugIdItems(items)
     }
 
-    private fun updateWindowState(wm: WindowManager, updateAccessibility: Boolean = false) {
+    fun updateWindowState(wm: WindowManager, updateAccessibility: Boolean = false) {
         if (canShow()) {
             if (updateAccessibility) updateAccessibilityPass()
             addWindow(wm)
@@ -694,30 +687,30 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
      * =======
      * OR
      * =======
-     * - [BaseDelegate.BaseState.isScreenOn] is true
+     * - [GlobalState.isScreenOn] is true
      * - [State.isTempHide] is false
-     * - [State.notificationsPanelFullyExpanded] is true AND [FrameSpecificPreferences.showInNotificationShade] is true
-     * - [State.hideForPresentIds] is false
-     * - [State.hideForNonPresentIds] is false
+     * - [GlobalState.notificationsPanelFullyExpanded] is true AND [FrameSpecificPreferences.showInNotificationShade] is true
+     * - [GlobalState.hideForPresentIds] is false
+     * - [GlobalState.hideForNonPresentIds] is false
      * - [PrefManager.widgetFrameEnabled] is true
-     * - [PrefManager.hideInLandscape] is false OR [screenOrientation] represents a portrait rotation
+     * - [PrefManager.hideInLandscape] is false OR [State.screenOrientation] represents a portrait rotation
      * =======
      * OR
      * =======
-     * - [BaseDelegate.BaseState.wasOnKeyguard] is true
-     * - [BaseDelegate.BaseState.isScreenOn] is true (i.e. the display is properly on: not in Doze or on the AOD)
+     * - [GlobalState.wasOnKeyguard] is true
+     * - [GlobalState.isScreenOn] is true (i.e. the display is properly on: not in Doze or on the AOD)
      * - [State.isTempHide] is false
      * - [FrameSpecificPreferences.showOnMainLockScreen] is true OR [FrameSpecificPreferences.showInNotificationShade] is false
-     * - [FrameSpecificPreferences.hideOnFaceWidgets] is false OR [State.isOnFaceWidgets] is false
-     * - [State.currentAppLayer] is less than 0 (i.e. doesn't exist)
-     * - [State.isOnEdgePanel] is false OR [FrameSpecificPreferences.hideOnEdgePanel] is false
-     * - [State.isOnScreenOffMemo] is false
-     * - [State.onMainLockscreen] is true OR [State.showingNotificationsPanel] is true OR [FrameSpecificPreferences.hideOnSecurityPage] is false
-     * - [State.showingNotificationsPanel] is false OR [FrameSpecificPreferences.hideOnNotificationShade] is false (OR [State.notificationsPanelFullyExpanded] is true AND [FrameSpecificPreferences.showInNotificationShade] is true
-     * - [State.notificationCount] is 0 (i.e. no notifications shown on lock screen, not necessarily no notifications at all) OR [FrameSpecificPreferences.hideOnNotifications] is false
-     * - [State.hideForPresentIds] is false OR [PrefManager.presentIds] is empty
-     * - [State.hideForNonPresentIds] is false OR [PrefManager.nonPresentIds] is empty
-     * - [PrefManager.hideInLandscape] is false OR [screenOrientation] represents a portrait rotation
+     * - [FrameSpecificPreferences.hideOnFaceWidgets] is false OR [GlobalState.isOnFaceWidgets] is false
+     * - [GlobalState.currentAppLayer] is less than 0 (i.e. doesn't exist)
+     * - [GlobalState.isOnEdgePanel] is false OR [FrameSpecificPreferences.hideOnEdgePanel] is false
+     * - [GlobalState.isOnScreenOffMemo] is false
+     * - [GlobalState.onMainLockScreen] is true OR [GlobalState.showingNotificationsPanel] is true OR [FrameSpecificPreferences.hideOnSecurityPage] is false
+     * - [GlobalState.showingNotificationsPanel] is false OR [FrameSpecificPreferences.hideOnNotificationShade] is false (OR [GlobalState.notificationsPanelFullyExpanded] is true AND [FrameSpecificPreferences.showInNotificationShade] is true
+     * - [GlobalState.notificationCount] is 0 (i.e. no notifications shown on lock screen, not necessarily no notifications at all) OR [FrameSpecificPreferences.hideOnNotifications] is false
+     * - [GlobalState.hideForPresentIds] is false OR [PrefManager.presentIds] is empty
+     * - [GlobalState.hideForNonPresentIds] is false OR [PrefManager.nonPresentIds] is empty
+     * - [PrefManager.hideInLandscape] is false OR [State.screenOrientation] represents a portrait rotation
      * - [PrefManager.widgetFrameEnabled] is true (i.e. the widget frame is actually enabled)
      * =======
      */
@@ -727,32 +720,32 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
         }
 
         fun forCommon(): Boolean {
-            return commonState.isScreenOn
+            return globalState.isScreenOn.value
                     && !state.isTempHide
-                    && !state.hideForPresentIds
-                    && !state.hideForNonPresentIds
+                    && !globalState.hideForPresentIds.value
+                    && !globalState.hideForNonPresentIds.value
                     && prefManager.widgetFrameEnabled
-                    && (!prefManager.hideInLandscape || commonState.screenOrientation == Surface.ROTATION_0 || commonState.screenOrientation == Surface.ROTATION_180)
+                    && (!prefManager.hideInLandscape || state.screenOrientation == Surface.ROTATION_0 || state.screenOrientation == Surface.ROTATION_180)
                     && prefManager.canShowFrameFromTasker
-                    && (!framePrefs.hideWhenKeyboardShown || !state.showingKeyboard)
+                    && (!framePrefs.hideWhenKeyboardShown || !globalState.showingKeyboard.value)
         }
 
         fun forNotificationCenter(): Boolean {
-            return (state.notificationsPanelFullyExpanded && framePrefs.showInNotificationShade)
+            return (globalState.notificationsPanelFullyExpanded.value && framePrefs.showInNotificationShade)
                     && forCommon()
         }
 
         fun forLockscreen(): Boolean {
-            return commonState.wasOnKeyguard
+            return globalState.wasOnKeyguard.value
                     && (framePrefs.showOnMainLockScreen || !framePrefs.showInNotificationShade)
-                    && (!framePrefs.hideOnFaceWidgets || !state.isOnFaceWidgets)
-                    && (state.currentAppLayer < 0 && state.currentAppPackage == null)
-                    && (!state.isOnEdgePanel || !framePrefs.hideOnEdgePanel)
-                    && !state.isOnScreenOffMemo
-                    && (state.onMainLockscreen || state.showingNotificationsPanel || !framePrefs.hideOnSecurityPage)
-                    && (!state.showingNotificationsPanel || !framePrefs.hideOnNotificationShade)
-                    && (state.notificationCount == 0 || !framePrefs.hideOnNotifications)
-                    && !state.hidingForPresentApp
+                    && (!framePrefs.hideOnFaceWidgets || !globalState.isOnFaceWidgets.value)
+                    && (globalState.currentAppLayer.value < 0 && globalState.currentAppPackage.value == null)
+                    && (!globalState.isOnEdgePanel.value || !framePrefs.hideOnEdgePanel)
+                    && !globalState.isOnScreenOffMemo.value
+                    && (globalState.onMainLockScreen.value || globalState.showingNotificationsPanel.value || !framePrefs.hideOnSecurityPage)
+                    && (!globalState.showingNotificationsPanel.value || !framePrefs.hideOnNotificationShade)
+                    && (globalState.notificationCount.value == 0 || !framePrefs.hideOnNotifications)
+                    && !globalState.hidingForPresentApp.value
                     && forCommon()
         }
 
@@ -774,7 +767,7 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
                         "hideInLandscape: ${prefManager.hideInLandscape}\n" +
                         "showInNotificationCenter: ${framePrefs.showInNotificationShade}\n" +
                         "hideOnEdgePanel: ${framePrefs.hideOnEdgePanel}\n" +
-                        "hidingForPresentApp: ${state.hidingForPresentApp}\n" +
+                        "hidingForPresentApp: ${globalState.hidingForPresentApp.value}\n" +
                         "canShowFrameFromTasker: ${prefManager.canShowFrameFromTasker}\n" +
                         "forceShowFrame: ${prefManager.forceShowFrame}\n" +
                         "hideOnFaceWidgets: ${framePrefs.hideOnFaceWidgets}\n" +
@@ -822,7 +815,7 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
                     )
                     binding.wallpaperBackground.scaleType = ImageView.ScaleType.MATRIX
                     binding.wallpaperBackground.imageMatrix = Matrix().apply {
-                        val realSize = screenSize
+                        val realSize = display.realSize
                         val loc = binding.root.locationOnScreen ?: intArrayOf(0, 0)
 
                         val dWidth: Int = intrinsicWidth
@@ -858,7 +851,7 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
     private fun updateAccessibilityPass() {
         if (binding.frame.animationState == WidgetFrameView.AnimationState.STATE_IDLE) {
             if (state.isPendingNotificationStateChange || state.isPendingOrientationStateChange) {
-                updateParamsIfNeeded()
+                updateWindow()
                 updateState {
                     it.copy(
                         isPendingNotificationStateChange = false,
@@ -890,26 +883,22 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
     }
 
     private fun updateCornerRadius() {
-        val radius = dpAsPx(prefManager.cornerRadiusDp).toFloat()
+        val radius = display.dpToPx(prefManager.cornerRadiusDp).toFloat()
         binding.frameCard.radius = radius
-
-        binding.editOutline.background = (binding.editOutline.background.mutate() as GradientDrawable).apply {
-            this.cornerRadius = radius
-        }
     }
 
     /**
      * Update the frame's params for its current state (normal
      * or in expanded notification center).
      */
-    private fun updateParamsIfNeeded() {
+    override fun updateWindow() {
         logUtils.debugLog("Checking if params need to be updated")
 
-        logUtils.debugLog("Possibly updating params with display size $screenSize", null)
+        logUtils.debugLog("Possibly updating params with display size ${display.realSize}", null)
 
-        val (newX, newY) = frameSizeAndPosition.getPositionForType(saveMode)
-        val (newW, newH) = frameSizeAndPosition.getSizeForType(saveMode).run {
-            Point(dpAsPx(x), dpAsPx(y))
+        val (newX, newY) = frameSizeAndPosition.getPositionForType(saveMode, display)
+        val (newW, newH) = frameSizeAndPosition.getSizeForType(saveMode, display).run {
+            Point(display.dpToPx(x), display.dpToPx(y))
         }
 
         var changed = false
@@ -948,7 +937,6 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
             binding.frame.updateWindow(wm, params)
             mainHandler.post {
                 updateWallpaperLayerIfNeeded()
-                blurManager.updateBlur(fromParamsUpdate = true)
                 adapter.updateViews()
                 scrollToStoredPosition(true)
             }
@@ -994,18 +982,6 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
     }
 
     data class State(
-        val isOnFaceWidgets: Boolean = false,
-        val currentAppLayer: Int = 0,
-        val isOnScreenOffMemo: Boolean = false,
-        val onMainLockscreen: Boolean = false,
-        val showingNotificationsPanel: Boolean = false,
-        val notificationCount: Int = 0,
-        val hideForPresentIds: Boolean = false,
-        val hideForNonPresentIds: Boolean = false,
-        val currentSysUiLayer: Int = 1,
-        val currentSystemLayer: Int = 0,
-        val currentAppPackage: String? = null,
-        val isOnEdgePanel: Boolean = false,
         val isPreview: Boolean = false,
         val selectionPreviewRequestCode: Int? = null,
         //This is used to track when the notification shade has
@@ -1023,9 +999,7 @@ open class MainWidgetFrameDelegate protected constructor(context: Context, prote
         //the params.
         val isPendingNotificationStateChange: Boolean = false,
         val isPendingOrientationStateChange: Boolean = false,
-        val notificationsPanelFullyExpanded: Boolean = false,
         val isTempHide: Boolean = false,
-        val hidingForPresentApp: Boolean = false,
-        val showingKeyboard: Boolean = false,
+        val screenOrientation: Int = Surface.ROTATION_0,
     )
 }

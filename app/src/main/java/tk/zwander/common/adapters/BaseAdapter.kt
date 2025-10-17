@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
-import android.os.Bundle
 import android.util.SizeF
 import android.view.ContextThemeWrapper
 import android.view.LayoutInflater
@@ -60,6 +59,7 @@ import kotlinx.coroutines.withContext
 import tk.zwander.common.activities.DismissOrUnlockActivity
 import tk.zwander.common.activities.PermissionIntentLaunchActivity
 import tk.zwander.common.compose.AppTheme
+import tk.zwander.common.compose.util.widgetViewCacheRegistry
 import tk.zwander.common.data.WidgetData
 import tk.zwander.common.data.WidgetType
 import tk.zwander.common.host.widgetHostCompat
@@ -67,17 +67,17 @@ import tk.zwander.common.listeners.WidgetResizeListener
 import tk.zwander.common.util.BrokenAppsRegistry
 import tk.zwander.common.util.Event
 import tk.zwander.common.util.EventObserver
+import tk.zwander.common.util.LSDisplay
 import tk.zwander.common.util.appWidgetManager
 import tk.zwander.common.util.compat.LayoutInflaterFactory2Compat
 import tk.zwander.common.util.createWidgetErrorView
-import tk.zwander.common.util.dpAsPx
 import tk.zwander.common.util.eventManager
 import tk.zwander.common.util.getAllInstalledWidgetProviders
 import tk.zwander.common.util.hasConfiguration
 import tk.zwander.common.util.logUtils
 import tk.zwander.common.util.mainHandler
 import tk.zwander.common.util.mitigations.SafeContextWrapper
-import tk.zwander.common.util.pxAsDp
+import tk.zwander.common.util.requireLsDisplayManager
 import tk.zwander.lockscreenwidgets.R
 import tk.zwander.lockscreenwidgets.databinding.ComposeViewHolderBinding
 import tk.zwander.lockscreenwidgets.databinding.FrameShortcutViewBinding
@@ -91,6 +91,7 @@ abstract class BaseAdapter(
     protected val context: Context,
     protected val rootView: View,
     protected val onRemoveCallback: (WidgetData, Int) -> Unit,
+    protected val displayId: Int,
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>(), CoroutineScope by MainScope() {
     companion object {
         const val VIEW_TYPE_WIDGET = 0
@@ -117,6 +118,10 @@ abstract class BaseAdapter(
 
     protected val host = context.widgetHostCompat
     protected val manager = context.appWidgetManager
+    protected val viewCacheRegistry = context.widgetViewCacheRegistry
+
+    protected val display: LSDisplay
+        get() = context.requireLsDisplayManager.availableDisplays.value[displayId]!!
 
     private val baseLayoutInflater =
         LayoutInflater.from(context).cloneInContext(ContextThemeWrapper(context, R.style.AppTheme))
@@ -418,7 +423,7 @@ abstract class BaseAdapter(
                     WidgetType.HEADER -> {}
                 }
 
-                binding.card.radius = context.dpAsPx(widgetCornerRadius).toFloat()
+                binding.card.radius = display.dpToPx(widgetCornerRadius).toFloat()
                 binding.widgetEditOutline.background =
                     (binding.widgetEditOutline.background.mutate() as GradientDrawable).apply {
                         this.cornerRadius = binding.card.radius
@@ -472,7 +477,7 @@ abstract class BaseAdapter(
                 }
             }
 
-            binding.openWidgetConfig.isVisible = widgetInfo.hasConfiguration(context) == true
+            binding.openWidgetConfig.isVisible = widgetInfo.hasConfiguration(context)
 
             if (widgetInfo != null) {
                 binding.widgetReconfigure.isVisible = false
@@ -489,10 +494,10 @@ abstract class BaseAdapter(
                             // way to do things. However, it's not trivial to just set a new source on an AppWidgetHostView,
                             // so this makes the most sense right now.
                             addView(withContext(Dispatchers.Main) {
-                                host.createView(
+                                viewCacheRegistry.getOrCreateView(
                                     SafeContextWrapper(itemView.context),
                                     data.id,
-                                    widgetInfo
+                                    widgetInfo,
                                 ).apply hostView@{
                                     findScrollableViewsInHierarchy(this).forEach { list ->
                                         list.isNestedScrollingEnabled = true
@@ -504,16 +509,16 @@ abstract class BaseAdapter(
                                         }
                                     }
 
-                                    val width = context.pxAsDp(itemView.width)
-                                    val height = context.pxAsDp(itemView.height)
+                                    val width = this@BaseAdapter.display.pxToDp(itemView.width)
+                                    val height = this@BaseAdapter.display.pxToDp(itemView.height)
 
-                                    val paddingValue = context.pxAsDp(
+                                    val paddingValue = this@BaseAdapter.display.pxToDp(
                                         context.resources.getDimensionPixelSize(R.dimen.app_widget_padding),
                                     )
 
                                     // Workaround to fix the One UI 5.1 battery grid widget on some devices.
                                     if (widgetInfo.provider.packageName == "com.android.settings.intelligence") {
-                                        updateAppWidgetOptions(Bundle().apply {
+                                        updateAppWidgetOptions(manager.getAppWidgetOptions(appWidgetId).apply {
                                             putBoolean("hsIsHorizontalIcon", false)
                                             putInt("semAppWidgetRowSpan", 1)
                                         })
@@ -521,7 +526,7 @@ abstract class BaseAdapter(
 
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                                         updateAppWidgetSize(
-                                            Bundle(),
+                                            manager.getAppWidgetOptions(appWidgetId),
                                             listOf(
                                                 SizeF(
                                                     width + 2 * paddingValue,
@@ -535,7 +540,7 @@ abstract class BaseAdapter(
 
                                         @Suppress("DEPRECATION")
                                         updateAppWidgetSize(
-                                            null,
+                                            manager.getAppWidgetOptions(appWidgetId),
                                             adjustedWidth.toInt(),
                                             adjustedHeight.toInt(),
                                             adjustedWidth.toInt(),
